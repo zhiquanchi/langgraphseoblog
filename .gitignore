@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Node
+node_modules/
+
+# Vite build output
+frontend/dist/
+
+# Logs
+*.log

@@ -17,3 +17,7 @@ frontend/dist/
 
 # Logs
 *.log
+
+# Local runtime artifacts
+*.db
+qwen-code-export-*.json

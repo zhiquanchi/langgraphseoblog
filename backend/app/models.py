@@ -21,7 +21,6 @@ class Provider(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    api_key: Mapped[str] = mapped_column(String(512), nullable=False)
     default_model: Mapped[str] = mapped_column(String(128), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -31,7 +30,6 @@ class Provider(Base):
     )
 
     def __repr__(self) -> str:
-        # 不包含 api_key，避免 repr 进入日志泄露密钥
         return (
             f"Provider(id={self.id!r}, name={self.name!r}, type={self.type!r}, "
             f"enabled={self.enabled!r}, priority={self.priority!r})"

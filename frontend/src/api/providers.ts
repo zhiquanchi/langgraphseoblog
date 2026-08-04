@@ -7,7 +7,6 @@ export interface ProviderItem {
   name: string
   type: ProviderType
   base_url: string | null
-  api_key_masked: string
   default_model: string
   enabled: boolean
   priority: number
@@ -18,7 +17,6 @@ export interface ProviderPayload {
   name: string
   type: ProviderType
   base_url?: string
-  api_key?: string
   default_model: string
   enabled?: boolean
   priority?: number
@@ -48,6 +46,43 @@ export function deleteProvider(id: number): Promise<void> {
   return http.delete<void>(`/providers/${id}`)
 }
 
-export function testProvider(id: number): Promise<TestResult> {
-  return http.post<TestResult>(`/providers/${id}/test`)
+export function testProvider(id: number, apiKey: string): Promise<TestResult> {
+  return http.post<TestResult>(`/providers/${id}/test`, { api_key: apiKey })
+}
+
+// ---- api_key 本地存储：密钥仅保存在浏览器 localStorage，不提交后端 ----
+
+const API_KEYS_STORAGE_KEY = 'provider_api_keys'
+
+function readApiKeys(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(API_KEYS_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeApiKeys(keys: Record<string, string>): void {
+  localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys))
+}
+
+export function getProviderApiKey(providerId: number): string | undefined {
+  return readApiKeys()[String(providerId)]
+}
+
+export function getProviderApiKeys(): Record<string, string> {
+  return readApiKeys()
+}
+
+export function setProviderApiKey(providerId: number, apiKey: string): void {
+  const keys = readApiKeys()
+  keys[String(providerId)] = apiKey
+  writeApiKeys(keys)
+}
+
+export function removeProviderApiKey(providerId: number): void {
+  const keys = readApiKeys()
+  delete keys[String(providerId)]
+  writeApiKeys(keys)
 }

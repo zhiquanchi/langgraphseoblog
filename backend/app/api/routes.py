@@ -43,7 +43,6 @@ def _provider_out(provider: Provider) -> schemas.ProviderOut:
         name=provider.name,
         type=provider.type,
         base_url=provider.base_url,
-        api_key_masked=schemas.mask_api_key(provider.api_key),
         default_model=provider.default_model,
         enabled=provider.enabled,
         priority=provider.priority,
@@ -127,9 +126,6 @@ def update_provider(
     provider = _get_provider_or_404(db, provider_id)
     data = payload.model_dump(exclude_unset=True)
 
-    if "api_key" in data and not data["api_key"]:
-        data.pop("api_key")  # 空串/None = 不更新
-
     if "name" in data and data["name"] != provider.name:
         exists = db.scalar(
             select(Provider).where(Provider.name == data["name"], Provider.id != provider_id)
@@ -166,10 +162,13 @@ def delete_provider(provider_id: int, db: Session = Depends(get_db)) -> Response
 
 
 @router.post("/providers/{provider_id}/test", response_model=schemas.TestResult)
-def test_provider(provider_id: int, db: Session = Depends(get_db)):
+def test_provider(
+    provider_id: int, payload: schemas.TestRequest, db: Session = Depends(get_db)
+) -> schemas.TestResult:
+    """测试连接：使用请求携带的 api_key（前端本地保存），后端不持久化。"""
     _get_provider_or_404(db, provider_id)
     try:
-        model = get_chat_model(provider_id)
+        model = get_chat_model(provider_id, api_key=payload.api_key)
         model.invoke("ping")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -283,7 +282,12 @@ def generate_blog(payload: schemas.GenerateRequest) -> schemas.GenerateResponse:
     """
     request_provider = str(payload.provider) if payload.provider is not None else None
     try:
-        wrapper = build_fallback_model("generate", request_provider, model_override=payload.model)
+        wrapper = build_fallback_model(
+            "generate",
+            request_provider,
+            model_override=payload.model,
+            provider_api_keys=payload.provider_api_keys,
+        )
     except ProviderNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:

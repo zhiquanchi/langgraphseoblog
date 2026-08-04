@@ -230,11 +230,16 @@ def build_fallback_model(
     node: str | None,
     request_provider: str | None,
     model_override: str | None = None,
+    provider_api_keys: dict[int, str] | None = None,
 ) -> FallbackChatModel:
     """解析候选链并构建 FallbackChatModel；空链回退环境变量模式。
 
     model_override 可选：显式传入时覆盖候选 provider 的 default_model。
+    provider_api_keys 为前端本地保存的密钥映射（provider_id -> api_key），
+    仅用于本次构建、不持久化；链中缺 key 的候选被跳过，显式指定的 provider
+    缺 key 时直接报错，空链回退环境变量模式。
     """
+    provider_api_keys = provider_api_keys or {}
     provider_ids = resolve_provider_ids(node, request_provider)
     if not provider_ids:
         env_model = build_env_chat_model()
@@ -242,18 +247,27 @@ def build_fallback_model(
         return FallbackChatModel([(None, "env", model_name, env_model)])
     candidates: list[Candidate] = []
     with SessionLocal() as session:
-        for provider_id in provider_ids:
+        for index, provider_id in enumerate(provider_ids):
             provider = session.get(Provider, provider_id)
             name = provider.name if provider is not None else str(provider_id)
             default_model = provider.default_model if provider is not None else "unknown"
+            api_key = provider_api_keys.get(provider_id)
+            if not api_key:
+                if index == 0 and request_provider is not None:
+                    raise ValueError(f"Provider {name} 未配置 API Key，请在本地填写后重试")
+                continue
             candidates.append(
                 (
                     provider_id,
                     name,
                     model_override or default_model,
-                    get_chat_model(provider_id, model_override),
+                    get_chat_model(provider_id, model_override, api_key),
                 )
             )
+    if not candidates:
+        env_model = build_env_chat_model()
+        model_name = model_override or getattr(env_model, "model_name", None) or "env"
+        return FallbackChatModel([(None, "env", model_name, env_model)])
     return FallbackChatModel(candidates)
 
 

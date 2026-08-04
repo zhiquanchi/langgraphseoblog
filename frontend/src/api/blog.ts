@@ -5,6 +5,8 @@ export interface GenerateRequest {
   keyword?: string
   provider?: string | number
   model?: string
+  // 前端本地保存的密钥映射（provider id -> api_key），仅本次请求使用
+  provider_api_keys?: Record<string, string>
 }
 
 export interface GenerateResponse {

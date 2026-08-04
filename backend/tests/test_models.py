@@ -1,5 +1,3 @@
-import logging
-
 import pytest
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
@@ -35,11 +33,17 @@ def test_tables_created(tmp_engine) -> None:
     assert {"idx_llm_calls_created", "idx_llm_calls_provider"} <= llm_calls_indexes
 
 
+def test_providers_table_has_no_api_key_column(tmp_engine) -> None:
+    """api_key 只存前端本地，后端表结构不允许出现密钥列。"""
+    inspector = inspect(tmp_engine)
+    columns = {col["name"] for col in inspector.get_columns("providers")}
+    assert "api_key" not in columns
+
+
 def test_provider_create(tmp_session) -> None:
     provider = Provider(
         name="openai-gpt4o",
         type="openai",
-        api_key="sk-test-1234",
         default_model="gpt-4o",
         priority=10,
     )
@@ -58,10 +62,10 @@ def test_provider_create(tmp_session) -> None:
 
 
 def test_provider_name_unique(tmp_session) -> None:
-    tmp_session.add(Provider(name="dup", type="openai", api_key="k1", default_model="m"))
+    tmp_session.add(Provider(name="dup", type="openai", default_model="m"))
     tmp_session.commit()
 
-    tmp_session.add(Provider(name="dup", type="anthropic", api_key="k2", default_model="m"))
+    tmp_session.add(Provider(name="dup", type="anthropic", default_model="m"))
     with pytest.raises(IntegrityError):
         tmp_session.commit()
 
@@ -93,18 +97,3 @@ def test_llm_call_defaults(tmp_session) -> None:
     assert call.node is None
     assert call.error is None
     assert call.created_at is not None
-
-
-def test_api_key_not_in_logs_or_repr(tmp_session, caplog) -> None:
-    secret = "sk-secret-key-abcdef0123456789"
-    provider = Provider(name="secure-provider", type="openai", api_key=secret, default_model="gpt-4o")
-
-    logger = logging.getLogger("app.models")
-    with caplog.at_level(logging.DEBUG):
-        tmp_session.add(provider)
-        tmp_session.commit()
-        logger.info("created %r", provider)
-        logger.info("provider row: %s", provider)
-
-    assert secret not in repr(provider)
-    assert secret not in caplog.text

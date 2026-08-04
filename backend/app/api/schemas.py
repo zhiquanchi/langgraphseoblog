@@ -7,18 +7,10 @@ from pydantic import BaseModel, Field
 from app.models import ProviderType
 
 
-def mask_api_key(api_key: str) -> str:
-    """掩码 api_key：长度 >= 8 保留前 3 后 4，其余全掩。"""
-    if len(api_key) >= 8:
-        return f"{api_key[:3]}****{api_key[-4:]}"
-    return "****"
-
-
 class ProviderCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     type: ProviderType
     base_url: str | None = None
-    api_key: str = Field(min_length=1, max_length=512)
     default_model: str = Field(min_length=1, max_length=128)
     enabled: bool = True
     priority: int = 0
@@ -28,7 +20,6 @@ class ProviderUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     type: ProviderType | None = None
     base_url: str | None = None
-    api_key: str | None = Field(default=None, max_length=512)
     default_model: str | None = Field(default=None, min_length=1, max_length=128)
     enabled: bool | None = None
     priority: int | None = None
@@ -39,7 +30,6 @@ class ProviderOut(BaseModel):
     name: str
     type: ProviderType
     base_url: str | None
-    api_key_masked: str
     default_model: str
     enabled: bool
     priority: int
@@ -56,6 +46,10 @@ class LLMSettingsOut(LLMSettingsIn):
     pass
 
 
+class TestRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=512)
+
+
 class TestResult(BaseModel):
     ok: bool
     message: str
@@ -66,6 +60,8 @@ class GenerateRequest(BaseModel):
     keyword: str = Field(default="", max_length=200)
     provider: str | int | None = None
     model: str | None = Field(default=None, max_length=128)
+    # 前端本地保存的密钥映射（provider_id -> api_key），仅本次请求使用，不落库
+    provider_api_keys: dict[int, str] = Field(default_factory=dict)
 
 
 class GenerateResponse(BaseModel):

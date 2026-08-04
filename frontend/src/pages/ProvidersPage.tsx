@@ -17,11 +17,18 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   createProvider,
   deleteProvider,
+  getProviderApiKey,
   listProviders,
+  removeProviderApiKey,
+  setProviderApiKey,
   testProvider,
   updateProvider,
 } from '../api/providers'
 import type { ProviderItem, ProviderPayload, ProviderType } from '../api/providers'
+
+interface ProviderFormValues extends ProviderPayload {
+  api_key?: string
+}
 
 const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
@@ -36,7 +43,7 @@ function ProvidersPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ProviderItem | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<ProviderPayload>()
+  const [form] = Form.useForm<ProviderFormValues>()
   const watchedType = Form.useWatch('type', form)
 
   const refresh = useCallback(async () => {
@@ -68,7 +75,6 @@ function ProvidersPage() {
       name: item.name,
       type: item.type,
       base_url: item.base_url ?? undefined,
-      api_key: undefined,
       default_model: item.default_model,
       enabled: item.enabled,
       priority: item.priority,
@@ -78,13 +84,20 @@ function ProvidersPage() {
 
   const handleSubmit = async () => {
     const values = await form.validateFields()
+    const { api_key, ...payload } = values
     setSaving(true)
     try {
       if (editing) {
-        await updateProvider(editing.id, values)
+        await updateProvider(editing.id, payload)
+        if (api_key) {
+          setProviderApiKey(editing.id, api_key)
+        }
         message.success('已更新')
       } else {
-        await createProvider(values)
+        const created = await createProvider(payload)
+        if (api_key) {
+          setProviderApiKey(created.id, api_key)
+        }
         message.success('已创建')
       }
       setModalOpen(false)
@@ -99,6 +112,7 @@ function ProvidersPage() {
   const handleDelete = async (item: ProviderItem) => {
     try {
       await deleteProvider(item.id)
+      removeProviderApiKey(item.id)
       message.success('已删除')
       await refresh()
     } catch (err) {
@@ -107,8 +121,13 @@ function ProvidersPage() {
   }
 
   const handleTest = async (item: ProviderItem) => {
+    const apiKey = getProviderApiKey(item.id)
+    if (!apiKey) {
+      message.warning(`Provider「${item.name}」尚未配置 API Key，请先编辑填写`)
+      return
+    }
     try {
-      const result = await testProvider(item.id)
+      const result = await testProvider(item.id, apiKey)
       if (result.ok) {
         message.success(`连接成功：${item.name}`)
       } else {
@@ -144,7 +163,16 @@ function ProvidersPage() {
       key: 'base_url',
       render: (url: string | null) => url ?? '—',
     },
-    { title: 'API Key', dataIndex: 'api_key_masked', key: 'api_key_masked' },
+    {
+      title: 'API Key',
+      key: 'api_key',
+      render: (_: unknown, record: ProviderItem) =>
+        getProviderApiKey(record.id) ? (
+          <Tag color="green">已配置（本地）</Tag>
+        ) : (
+          <Tag color="default">未配置</Tag>
+        ),
+    },
     { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
     {
       title: '启用',
@@ -214,10 +242,13 @@ function ProvidersPage() {
           </Form.Item>
           <Form.Item
             name="api_key"
-            label={editing ? 'API Key（留空表示不修改）' : 'API Key'}
-            rules={[{ required: !editing, message: '请输入 API Key' }]}
+            label={
+              editing
+                ? 'API Key（留空不修改；仅保存在本地浏览器）'
+                : 'API Key（仅保存在本地浏览器）'
+            }
           >
-            <Input.Password placeholder={editing ? '不修改请留空' : 'sk-...'} />
+            <Input.Password placeholder={editing ? '不修改请留空' : 'sk-...'} autoComplete="new-password" />
           </Form.Item>
           <Form.Item
             name="default_model"

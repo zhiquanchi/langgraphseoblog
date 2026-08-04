@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Form, Input, Select, Typography, message } from 'antd'
 import { generateBlog } from '../api/blog'
 import type { GenerateResponse } from '../api/blog'
-import { listProviders } from '../api/providers'
+import { getProviderApiKey, getProviderApiKeys, listProviders } from '../api/providers'
 import type { ProviderItem } from '../api/providers'
 
 const { Title, Paragraph } = Typography
@@ -33,6 +33,7 @@ function GeneratePage() {
         topic: values.topic,
         keyword: values.keyword ?? '',
         provider: values.provider,
+        provider_api_keys: getProviderApiKeys(),
       })
       setResult(resp)
     } catch (err) {
@@ -58,7 +59,7 @@ function GeneratePage() {
             placeholder="系统默认"
             options={providers.map((p) => ({
               value: p.name,
-              label: `${p.name} (${p.default_model})`,
+              label: `${p.name} (${p.default_model})${getProviderApiKey(p.id) ? '' : ' · 未配置 Key'}`,
             }))}
           />
         </Form.Item>

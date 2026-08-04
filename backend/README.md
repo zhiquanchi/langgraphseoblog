@@ -20,7 +20,7 @@ export SEARCH_PROVIDER=tavily
 export TAVILY_API_KEY=tvly-...
 ```
 
-接口为 `POST /api/research/topic`。返回结果包含研究简报和参考来源；系统不会使用 Tavily 的 `include_answer`，也不会把 Tavily API Key 写入数据库。
+也可以在前端生成页填写 Tavily Key。前端只将 Key 保存在浏览器本地，并在研究请求中临时发送；服务端优先使用请求中的 Key，否则回退到 `TAVILY_API_KEY`。接口为 `POST /api/research/topic`。返回结果包含研究简报和参考来源；系统不会使用 Tavily 的 `include_answer`，也不会把 Tavily API Key 写入数据库。
 
 ## 测试
 

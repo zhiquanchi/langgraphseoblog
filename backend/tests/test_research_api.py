@@ -33,7 +33,7 @@ class FakeSearchProvider:
 
 def test_research_topic_returns_structured_brief(monkeypatch) -> None:
     monkeypatch.setattr("app.api.routes.build_fallback_model", lambda *args, **kwargs: FakeResearchModel())
-    monkeypatch.setattr("app.api.routes.get_search_provider", lambda: FakeSearchProvider())
+    monkeypatch.setattr("app.api.routes.get_search_provider", lambda *_args: FakeSearchProvider())
 
     response = research_topic(
         ResearchRequest(topic="LangGraph 最佳实践", keyword="langgraph tutorial")

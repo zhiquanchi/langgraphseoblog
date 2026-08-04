@@ -77,6 +77,8 @@ class ResearchRequest(BaseModel):
     model: str | None = Field(default=None, max_length=128)
     # 前端本地保存的密钥映射，仅本次请求使用。
     provider_api_keys: dict[int, str] = Field(default_factory=dict)
+    # Tavily Key 由前端本地保存，仅本次请求使用，不落库。
+    search_api_key: str | None = Field(default=None, max_length=512)
 
     @field_validator("topic")
     @classmethod

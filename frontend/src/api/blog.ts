@@ -21,6 +21,7 @@ export interface ResearchRequest {
   provider?: string | number
   model?: string
   provider_api_keys?: Record<string, string>
+  search_api_key?: string
 }
 
 export interface ResearchResponse {
@@ -50,4 +51,18 @@ export function generateBlog(payload: GenerateRequest): Promise<GenerateResponse
 
 export function researchTopic(payload: ResearchRequest): Promise<ResearchResponse> {
   return http.post<ResearchResponse>('/research/topic', payload)
+}
+
+const TAVILY_API_KEY_STORAGE_KEY = 'tavily_api_key'
+
+export function getTavilyApiKey(): string {
+  return localStorage.getItem(TAVILY_API_KEY_STORAGE_KEY) ?? ''
+}
+
+export function setTavilyApiKey(apiKey: string): void {
+  if (apiKey) {
+    localStorage.setItem(TAVILY_API_KEY_STORAGE_KEY, apiKey)
+  } else {
+    localStorage.removeItem(TAVILY_API_KEY_STORAGE_KEY)
+  }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, List, Select, Space, Typography, message } from 'antd'
-import { generateBlog, researchTopic } from '../api/blog'
+import { generateBlog, getTavilyApiKey, researchTopic, setTavilyApiKey } from '../api/blog'
 import type { GenerateResponse, ResearchResponse } from '../api/blog'
 import { getProviderApiKey, getProviderApiKeys, listProviders } from '../api/providers'
 import type { ProviderItem } from '../api/providers'
@@ -20,8 +20,10 @@ function GeneratePage() {
   const [research, setResearch] = useState<ResearchResponse | null>(null)
   const [result, setResult] = useState<GenerateResponse | null>(null)
   const [form] = Form.useForm<GenerateForm>()
+  const [tavilyApiKey, setTavilyApiKeyState] = useState('')
 
   useEffect(() => {
+    setTavilyApiKeyState(getTavilyApiKey())
     listProviders()
       .then((items) => setProviders(items.filter((p) => p.enabled)))
       .catch(() => setProviders([]))
@@ -54,6 +56,7 @@ function GeneratePage() {
         keyword: values.keyword ?? '',
         provider: values.provider,
         provider_api_keys: getProviderApiKeys(),
+        search_api_key: tavilyApiKey || undefined,
       })
       setResearch(resp)
       message.success('选题研究完成')
@@ -68,6 +71,18 @@ function GeneratePage() {
     <div>
       <Title level={2}>博客生成</Title>
       <Form form={form} layout="vertical" style={{ maxWidth: 640 }}>
+        <Card size="small" title="实时研究配置" style={{ marginBottom: 16 }}>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+            Tavily Key 仅保存在当前浏览器，并在研究请求中临时发送到后端。
+          </Typography.Paragraph>
+          <Input.Password
+            value={tavilyApiKey}
+            placeholder="tvly-...（留空则使用服务端 TAVILY_API_KEY）"
+            autoComplete="new-password"
+            onChange={(event) => setTavilyApiKeyState(event.target.value)}
+            onBlur={() => setTavilyApiKey(tavilyApiKey.trim())}
+          />
+        </Card>
         <Form.Item name="topic" label="主题" rules={[{ required: true, message: '请输入主题' }]}>
           <Input placeholder="如：LangGraph 最佳实践" />
         </Form.Item>

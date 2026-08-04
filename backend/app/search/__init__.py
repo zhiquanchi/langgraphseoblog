@@ -10,14 +10,14 @@ class SearchProviderNotConfiguredError(RuntimeError):
     """没有配置可用的实时搜索 Provider。"""
 
 
-def get_search_provider() -> SearchProvider:
+def get_search_provider(api_key: str | None = None) -> SearchProvider:
     provider = os.environ.get("SEARCH_PROVIDER", "tavily").strip().lower()
     if provider != "tavily":
         raise SearchProviderNotConfiguredError(f"不支持的搜索 Provider: {provider}")
-    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
-    if not api_key:
+    resolved_api_key = (api_key or os.environ.get("TAVILY_API_KEY", "")).strip()
+    if not resolved_api_key:
         raise SearchProviderNotConfiguredError("未配置 TAVILY_API_KEY")
-    return TavilySearchProvider(api_key)
+    return TavilySearchProvider(resolved_api_key)
 
 
 __all__ = ["SearchProvider", "SearchResult", "SearchProviderNotConfiguredError", "get_search_provider"]

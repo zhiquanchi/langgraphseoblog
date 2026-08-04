@@ -314,7 +314,7 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
     """研究主题并返回结构化简报，供用户确认后进入文章生成。"""
     request_provider = str(payload.provider) if payload.provider is not None else None
     try:
-        search_provider = get_search_provider()
+        search_provider = get_search_provider(payload.search_api_key)
         sources = collect_topic_sources(
             search_provider, payload.topic.strip(), payload.keyword.strip()
         )

@@ -13,6 +13,7 @@ from app.llm.fallback import build_fallback_model
 from app.llm.resolver import ProviderNotFoundError
 from app.llm.stats import mask_sensitive
 from app.models import AppSettings, LLMCall, Provider
+from app.research import build_research_prompt, parse_research_result
 
 from . import schemas
 
@@ -303,3 +304,34 @@ def generate_blog(payload: schemas.GenerateRequest) -> schemas.GenerateResponse:
     article = wrapper.invoke(prompt, node="generate")
     provider_id, provider_name, model = wrapper.last_used or (None, "env", "env")
     return schemas.GenerateResponse(article=article, provider_name=provider_name, model=model)
+
+
+@router.post("/research/topic", response_model=schemas.ResearchResponse)
+def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse:
+    """研究主题并返回结构化简报，供用户确认后进入文章生成。"""
+    request_provider = str(payload.provider) if payload.provider is not None else None
+    try:
+        wrapper = build_fallback_model(
+            "research",
+            request_provider,
+            model_override=payload.model,
+            provider_api_keys=payload.provider_api_keys,
+        )
+        raw_result = wrapper.invoke(
+            build_research_prompt(payload.topic.strip(), payload.keyword.strip()),
+            node="research",
+        )
+        brief = parse_research_result(raw_result)
+    except ProviderNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _, provider_name, model = wrapper.last_used or (None, "env", "env")
+    return schemas.ResearchResponse(
+        topic=payload.topic.strip(),
+        keyword=payload.keyword.strip(),
+        provider_name=provider_name,
+        model=model,
+        **brief,
+    )

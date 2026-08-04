@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models import ProviderType
 
@@ -66,6 +66,37 @@ class GenerateRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     article: str
+    provider_name: str
+    model: str
+
+
+class ResearchRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=500)
+    keyword: str = Field(default="", max_length=200)
+    provider: str | int | None = None
+    model: str | None = Field(default=None, max_length=128)
+    # 前端本地保存的密钥映射，仅本次请求使用。
+    provider_api_keys: dict[int, str] = Field(default_factory=dict)
+
+    @field_validator("topic")
+    @classmethod
+    def topic_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("topic 不能为空")
+        return value
+
+
+class ResearchResponse(BaseModel):
+    topic: str
+    keyword: str
+    audience: str
+    search_intent: str
+    content_angles: list[str]
+    related_questions: list[str]
+    competitor_gaps: list[str]
+    recommended_title: str
+    outline: list[str]
     provider_name: str
     model: str
 

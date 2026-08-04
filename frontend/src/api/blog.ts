@@ -15,6 +15,32 @@ export interface GenerateResponse {
   model: string
 }
 
+export interface ResearchRequest {
+  topic: string
+  keyword?: string
+  provider?: string | number
+  model?: string
+  provider_api_keys?: Record<string, string>
+}
+
+export interface ResearchResponse {
+  topic: string
+  keyword: string
+  audience: string
+  search_intent: string
+  content_angles: string[]
+  related_questions: string[]
+  competitor_gaps: string[]
+  recommended_title: string
+  outline: string[]
+  provider_name: string
+  model: string
+}
+
 export function generateBlog(payload: GenerateRequest): Promise<GenerateResponse> {
   return http.post<GenerateResponse>('/blog/generate', payload)
+}
+
+export function researchTopic(payload: ResearchRequest): Promise<ResearchResponse> {
+  return http.post<ResearchResponse>('/research/topic', payload)
 }

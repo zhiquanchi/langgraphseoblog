@@ -14,6 +14,9 @@ from app.llm.resolver import ProviderNotFoundError
 from app.llm.stats import mask_sensitive
 from app.models import AppSettings, LLMCall, Provider
 from app.research import build_research_prompt, parse_research_result
+from app.research import collect_topic_sources
+from app.search import SearchProviderNotConfiguredError, get_search_provider
+from app.search.tavily import TavilySearchError
 
 from . import schemas
 
@@ -311,6 +314,10 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
     """研究主题并返回结构化简报，供用户确认后进入文章生成。"""
     request_provider = str(payload.provider) if payload.provider is not None else None
     try:
+        search_provider = get_search_provider()
+        sources = collect_topic_sources(
+            search_provider, payload.topic.strip(), payload.keyword.strip()
+        )
         wrapper = build_fallback_model(
             "research",
             request_provider,
@@ -318,7 +325,7 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
             provider_api_keys=payload.provider_api_keys,
         )
         raw_result = wrapper.invoke(
-            build_research_prompt(payload.topic.strip(), payload.keyword.strip()),
+            build_research_prompt(payload.topic.strip(), payload.keyword.strip(), sources),
             node="research",
         )
         brief = parse_research_result(raw_result)
@@ -326,6 +333,8 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (SearchProviderNotConfiguredError, TavilySearchError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     _, provider_name, model = wrapper.last_used or (None, "env", "env")
     return schemas.ResearchResponse(
@@ -333,5 +342,13 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
         keyword=payload.keyword.strip(),
         provider_name=provider_name,
         model=model,
+        sources=[
+            schemas.ResearchSource(
+                title=source.title,
+                url=source.url,
+                published_at=source.published_at,
+            )
+            for source in sources
+        ],
         **brief,
     )

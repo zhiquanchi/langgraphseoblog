@@ -35,6 +35,13 @@ export interface ResearchResponse {
   outline: string[]
   provider_name: string
   model: string
+  sources: ResearchSource[]
+}
+
+export interface ResearchSource {
+  title: string
+  url: string
+  published_at: string | null
 }
 
 export function generateBlog(payload: GenerateRequest): Promise<GenerateResponse> {

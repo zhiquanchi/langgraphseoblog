@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.api.routes import research_topic
 from app.api.schemas import ResearchRequest
+from app.search.base import SearchResult
 
 
 @dataclass
@@ -25,8 +26,14 @@ class FakeResearchModel:
         }"""
 
 
+class FakeSearchProvider:
+    def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+        return [SearchResult("参考资料", "https://example.com/source", "来源内容")]
+
+
 def test_research_topic_returns_structured_brief(monkeypatch) -> None:
     monkeypatch.setattr("app.api.routes.build_fallback_model", lambda *args, **kwargs: FakeResearchModel())
+    monkeypatch.setattr("app.api.routes.get_search_provider", lambda: FakeSearchProvider())
 
     response = research_topic(
         ResearchRequest(topic="LangGraph 最佳实践", keyword="langgraph tutorial")
@@ -38,6 +45,7 @@ def test_research_topic_returns_structured_brief(monkeypatch) -> None:
     assert response.outline == ["核心概念", "断点续跑", "实践建议"]
     assert response.provider_name == "test-provider"
     assert response.model == "test-model"
+    assert response.sources[0].url == "https://example.com/source"
 
 
 def test_research_topic_rejects_blank_topic() -> None:

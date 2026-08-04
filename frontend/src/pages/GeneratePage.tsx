@@ -122,6 +122,19 @@ function GeneratePage() {
             dataSource={research.outline}
             renderItem={(item, index) => <List.Item>{index + 1}. {item}</List.Item>}
           />
+          <Typography.Title level={5}>参考来源</Typography.Title>
+          <List
+            size="small"
+            dataSource={research.sources}
+            locale={{ emptyText: '没有检索到可用来源' }}
+            renderItem={(source) => (
+              <List.Item>
+                <a href={source.url} target="_blank" rel="noreferrer">
+                  {source.title}
+                </a>
+              </List.Item>
+            )}
+          />
         </Card>
       )}
       {result && (

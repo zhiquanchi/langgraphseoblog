@@ -99,6 +99,13 @@ class ResearchResponse(BaseModel):
     outline: list[str]
     provider_name: str
     model: str
+    sources: list["ResearchSource"]
+
+
+class ResearchSource(BaseModel):
+    title: str
+    url: str
+    published_at: str | None = None
 
 
 class LLMCallOut(BaseModel):

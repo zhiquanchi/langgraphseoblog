@@ -1,8 +1,9 @@
 """Provider 与设置管理 API 的请求/响应模型。"""
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import ProviderType
 
@@ -161,3 +162,38 @@ class NodeStat(BaseModel):
 class StatsOut(BaseModel):
     by_provider: list[ProviderStat]
     by_node: list[NodeStat]
+
+
+class GraphStartRequest(BaseModel):
+    """启动博客生成工作流：生成大纲后在 interrupt 处暂停。"""
+
+    topic: str = Field(min_length=1, max_length=500)
+    keyword: str = Field(default="", max_length=200)
+    provider: str | int | None = None
+    model: str | None = Field(default=None, max_length=128)
+    # 前端本地保存的密钥映射（provider_id -> api_key），仅本次请求使用，不落库
+    provider_api_keys: dict[int, str] = Field(default_factory=dict)
+
+    @field_validator("topic")
+    @classmethod
+    def topic_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("topic 不能为空")
+        return value
+
+
+class GraphResumeRequest(BaseModel):
+    """恢复 interrupt 暂停的工作流：revise 继续修订大纲，approve 确认并撰写正文。"""
+
+    action: Literal["revise", "approve"]
+    instruction: str | None = Field(default=None, max_length=1000)
+    # approve 时可携带前端手动编辑后的标题/大纲
+    title: str | None = Field(default=None, max_length=200)
+    outline: list[str] | None = None
+
+    @model_validator(mode="after")
+    def revise_requires_instruction(self) -> "GraphResumeRequest":
+        if self.action == "revise" and not (self.instruction or "").strip():
+            raise ValueError("revise 必须提供 instruction")
+        return self

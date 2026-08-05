@@ -1,13 +1,18 @@
-"""REST 路由：Provider 管理、全局 LLM 设置、调用统计。"""
+"""REST 路由：Provider 管理、全局 LLM 设置、调用统计、博客生成工作流（SSE）。"""
 
 import json
+import uuid
+from collections.abc import Iterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from langgraph.types import Command
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.graph import graph
 from app.llm.factory import get_chat_model
 from app.llm.fallback import build_fallback_model
 from app.llm.model_catalog import CATALOG, ModelDiscoveryError, discover_models
@@ -381,3 +386,111 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
         ],
         **brief,
     )
+
+
+# ---------------------------------------------------------------------------
+# 博客生成工作流（LangGraph + SSE）
+# ---------------------------------------------------------------------------
+#
+# SSE 事件序列：
+#   thread        新线程 ID（仅 start 接口首发）
+#   node          节点执行进度 {"node": "outline" | "review_outline" | "draft"}
+#   outline_token 大纲 JSON token 流（前端可忽略，用于即时反馈）
+#   interrupt     大纲待确认 {"title": str, "outline": [str]}
+#   article_token 正文 token 流
+#   result        完成 {"article": str, "provider_name": str, "model": str}
+#   error         失败 {"message": str}
+#   done          事件流结束
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _graph_config(thread_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def _stream_graph(source: Any, config: dict[str, Any]) -> Iterator[str]:
+    """驱动图执行并把流式事件转成 SSE 帧；失败以 error 事件收尾。"""
+    try:
+        for mode, chunk in graph.stream(source, config, stream_mode=["updates", "custom"]):
+            if mode == "custom":
+                yield _sse(chunk["type"], {"text": chunk["text"]})
+            elif "__interrupt__" in chunk:
+                pending = chunk["__interrupt__"][0].value
+                yield _sse("interrupt", pending)
+            else:
+                for node_name in chunk:
+                    yield _sse("node", {"node": node_name})
+        final = graph.get_state(config).values
+        if final.get("article"):
+            yield _sse(
+                "result",
+                {
+                    "article": final["article"],
+                    "provider_name": final.get("provider_name", ""),
+                    "model": final.get("model_name", ""),
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 — 流式中所有失败都经 error 事件返回前端
+        yield _sse("error", {"message": mask_sensitive(f"{type(exc).__name__}: {exc}")})
+    yield _sse("done", {})
+
+
+def _validate_provider_chain(payload: schemas.GraphStartRequest) -> None:
+    """流式响应一旦开始便无法返回 4xx，启动前预先解析候选链以快速失败。"""
+    request_provider = str(payload.provider) if payload.provider is not None else None
+    try:
+        build_fallback_model(
+            "outline",
+            request_provider,
+            model_override=payload.model,
+            provider_api_keys=payload.provider_api_keys,
+        )
+    except (ProviderNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/blog/threads")
+def start_blog_thread(payload: schemas.GraphStartRequest) -> StreamingResponse:
+    """启动博客生成工作流：生成大纲后在 interrupt 处暂停，等待确认。"""
+    _validate_provider_chain(payload)
+    thread_id = uuid.uuid4().hex
+    state = {
+        "topic": payload.topic,
+        "keyword": payload.keyword.strip(),
+        "provider": str(payload.provider) if payload.provider is not None else None,
+        "model": payload.model,
+        "provider_api_keys": payload.provider_api_keys,
+    }
+
+    def events() -> Iterator[str]:
+        yield _sse("thread", {"thread_id": thread_id})
+        yield from _stream_graph(state, _graph_config(thread_id))
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.post("/blog/threads/{thread_id}/resume")
+def resume_blog_thread(
+    thread_id: str, payload: schemas.GraphResumeRequest
+) -> StreamingResponse:
+    """恢复暂停的工作流：revise 携带修订指令，approve 确认大纲并流式撰写正文。"""
+    config = _graph_config(thread_id)
+    if not graph.get_state(config).values:
+        raise HTTPException(status_code=404, detail="工作流线程不存在或已结束")
+
+    resume: dict[str, Any] = {"action": payload.action}
+    if payload.action == "revise":
+        resume["instruction"] = (payload.instruction or "").strip()
+    else:
+        if payload.title:
+            resume["title"] = payload.title
+        if payload.outline:
+            resume["outline"] = [item.strip() for item in payload.outline if item.strip()]
+
+    def events() -> Iterator[str]:
+        yield from _stream_graph(Command(resume=resume), config)
+
+    return StreamingResponse(events(), media_type="text/event-stream")

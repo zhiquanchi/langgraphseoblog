@@ -2,6 +2,11 @@ import { http } from './client'
 
 export type ProviderType = 'openai' | 'anthropic' | 'ark' | 'openai-compatible'
 
+export interface ModelOption {
+  id: string
+  name: string
+}
+
 export interface ProviderItem {
   id: number
   name: string
@@ -29,6 +34,13 @@ export interface TestResult {
 
 export function listProviders(): Promise<ProviderItem[]> {
   return http.get<ProviderItem[]>('/providers')
+}
+
+export function discoverProviderModels(
+  providerType: ProviderType,
+  apiKey: string,
+): Promise<{ provider_type: ProviderType; homepage: string; models: ModelOption[] }> {
+  return http.post('/providers/models', { provider_type: providerType, api_key: apiKey })
 }
 
 export function createProvider(payload: ProviderPayload): Promise<ProviderItem> {

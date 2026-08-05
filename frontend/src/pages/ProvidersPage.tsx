@@ -17,6 +17,7 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   createProvider,
   deleteProvider,
+  discoverProviderModels,
   getProviderApiKey,
   listProviders,
   removeProviderApiKey,
@@ -24,7 +25,7 @@ import {
   testProvider,
   updateProvider,
 } from '../api/providers'
-import type { ProviderItem, ProviderPayload, ProviderType } from '../api/providers'
+import type { ModelOption, ProviderItem, ProviderPayload, ProviderType } from '../api/providers'
 
 interface ProviderFormValues extends ProviderPayload {
   api_key?: string
@@ -34,7 +35,6 @@ const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'ark', label: '火山方舟 (Ark)' },
-  { value: 'openai-compatible', label: 'OpenAI 兼容端点' },
 ]
 
 function ProvidersPage() {
@@ -43,8 +43,10 @@ function ProvidersPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ProviderItem | null>(null)
   const [saving, setSaving] = useState(false)
+  const [discovering, setDiscovering] = useState(false)
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [manualModel, setManualModel] = useState(false)
   const [form] = Form.useForm<ProviderFormValues>()
-  const watchedType = Form.useWatch('type', form)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -64,6 +66,8 @@ function ProvidersPage() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
+    setModelOptions([])
+    setManualModel(false)
     form.setFieldsValue({ type: 'openai', enabled: true, priority: 0 })
     setModalOpen(true)
   }
@@ -71,6 +75,8 @@ function ProvidersPage() {
   const openEdit = (item: ProviderItem) => {
     setEditing(item)
     form.resetFields()
+    setModelOptions([{ id: item.default_model, name: item.default_model }])
+    setManualModel(false)
     form.setFieldsValue({
       name: item.name,
       type: item.type,
@@ -80,6 +86,29 @@ function ProvidersPage() {
       priority: item.priority,
     })
     setModalOpen(true)
+  }
+
+  const handleDiscoverModels = async () => {
+    const providerType = form.getFieldValue('type') as ProviderType
+    const apiKey = form.getFieldValue('api_key') as string | undefined
+    if (!apiKey?.trim()) {
+      message.warning('请先填写 API Key')
+      return
+    }
+    setDiscovering(true)
+    setManualModel(false)
+    try {
+      const result = await discoverProviderModels(providerType, apiKey.trim())
+      setModelOptions(result.models)
+      form.setFieldValue('default_model', undefined)
+      message.success(`已获取 ${result.models.length} 个模型`)
+    } catch (err) {
+      setModelOptions([])
+      setManualModel(true)
+      message.warning(`${err instanceof Error ? err.message : '模型列表获取失败'}，请手动填写 model ID`)
+    } finally {
+      setDiscovering(false)
+    }
   }
 
   const handleSubmit = async () => {
@@ -229,18 +258,6 @@ function ProvidersPage() {
             <Select options={TYPE_OPTIONS} />
           </Form.Item>
           <Form.Item
-            name="base_url"
-            label="Base URL"
-            rules={[
-              {
-                required: watchedType === 'ark' || watchedType === 'openai-compatible',
-                message: '该类型必须提供 Base URL',
-              },
-            ]}
-          >
-            <Input placeholder="https://api.example.com/v1" />
-          </Form.Item>
-          <Form.Item
             name="api_key"
             label={
               editing
@@ -250,12 +267,28 @@ function ProvidersPage() {
           >
             <Input.Password placeholder={editing ? '不修改请留空' : 'sk-...'} autoComplete="new-password" />
           </Form.Item>
-          <Form.Item
-            name="default_model"
-            label="默认模型"
-            rules={[{ required: true, message: '请输入默认模型' }]}
-          >
-            <Input placeholder="如 gpt-4o-mini" />
+          <Form.Item label="模型" required>
+            <Space.Compact style={{ width: '100%' }}>
+              {manualModel || modelOptions.length === 0 ? (
+                <Form.Item name="default_model" noStyle rules={[{ required: true, message: '请输入 model ID' }]}>
+                  <Input placeholder="获取失败后手动填写 model ID" />
+                </Form.Item>
+              ) : (
+                <Form.Item name="default_model" noStyle rules={[{ required: true, message: '请选择模型' }]}>
+                  <Select
+                    options={modelOptions.map((model) => ({
+                      label: model.name === model.id ? model.id : `${model.name} (${model.id})`,
+                      value: model.id,
+                    }))}
+                    placeholder="请先获取模型列表"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
+              )}
+              <Button loading={discovering} onClick={() => void handleDiscoverModels()}>
+                获取模型
+              </Button>
+            </Space.Compact>
           </Form.Item>
           <Space size="large">
             <Form.Item name="priority" label="优先级（越大越优先）">

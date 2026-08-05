@@ -55,6 +55,22 @@ class TestResult(BaseModel):
     message: str
 
 
+class ModelDiscoveryRequest(BaseModel):
+    provider_type: str = Field(min_length=1, max_length=32)
+    api_key: str = Field(min_length=1, max_length=512)
+
+
+class ModelOption(BaseModel):
+    id: str
+    name: str
+
+
+class ModelDiscoveryResponse(BaseModel):
+    provider_type: str
+    homepage: str
+    models: list[ModelOption]
+
+
 class GenerateRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     keyword: str = Field(default="", max_length=200)

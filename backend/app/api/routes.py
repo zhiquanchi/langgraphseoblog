@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.llm.factory import get_chat_model
 from app.llm.fallback import build_fallback_model
+from app.llm.model_catalog import CATALOG, ModelDiscoveryError, discover_models
 from app.llm.resolver import ProviderNotFoundError
 from app.llm.stats import mask_sensitive
 from app.models import AppSettings, LLMCall, Provider
@@ -118,6 +119,18 @@ def list_providers(
     return [_provider_out(p) for p in providers]
 
 
+@router.get("/providers/catalog")
+def provider_catalog() -> list[dict[str, str]]:
+    return [
+        {
+            "type": item.type,
+            "label": item.label,
+            "homepage": item.homepage,
+        }
+        for item in CATALOG.values()
+    ]
+
+
 @router.get("/providers/{provider_id}", response_model=schemas.ProviderOut)
 def get_provider(provider_id: int, db: Session = Depends(get_db)) -> schemas.ProviderOut:
     return _provider_out(_get_provider_or_404(db, provider_id))
@@ -181,6 +194,22 @@ def test_provider(
             status_code=502, content={"ok": False, "message": mask_sensitive(str(exc))}
         )
     return schemas.TestResult(ok=True, message="连接成功")
+
+
+@router.post("/providers/models", response_model=schemas.ModelDiscoveryResponse)
+def discover_provider_models(payload: schemas.ModelDiscoveryRequest) -> schemas.ModelDiscoveryResponse:
+    catalog = CATALOG.get(payload.provider_type)
+    if catalog is None:
+        raise HTTPException(status_code=400, detail=f"不支持自动获取 {payload.provider_type} 的模型列表")
+    try:
+        models = discover_models(payload.provider_type, payload.api_key)
+    except ModelDiscoveryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return schemas.ModelDiscoveryResponse(
+        provider_type=payload.provider_type,
+        homepage=catalog.homepage,
+        models=models,
+    )
 
 
 @router.get("/settings/llm", response_model=schemas.LLMSettingsOut)

@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Flex, Form, Input, Select, Skeleton, Typography, message } from 'antd'
+import { useMemo, useState } from 'react'
+import { Button, Card, Flex, Form, Input, Skeleton, Typography, message } from 'antd'
+import { Link } from 'react-router-dom'
 import { Bubble, Sender } from '@ant-design/x'
 import type { BubbleItemType } from '@ant-design/x'
 import { resumeBlogThread, startBlogThread } from '../api/blog'
 import type { GraphEvent } from '../api/blog'
-import { getProviderApiKey, getProviderApiKeys, listProviders } from '../api/providers'
-import type { ProviderItem } from '../api/providers'
+import { getProviderApiKeys } from '../api/providers'
 
 const { Title, Paragraph } = Typography
 
 interface GenerateForm {
   topic: string
   keyword?: string
-  provider?: string
 }
 
 interface OutlineDraft {
@@ -121,7 +120,6 @@ function OutlinePanel({ draft, editable, onChange }: OutlinePanelProps) {
 }
 
 function GeneratePage() {
-  const [providers, setProviders] = useState<ProviderItem[]>([])
   const [chat, setChat] = useState<ChatItem[]>([])
   const [threadId, setThreadId] = useState<string | null>(null)
   const [draft, setDraft] = useState<OutlineDraft | null>(null)
@@ -132,12 +130,6 @@ function GeneratePage() {
   const [articleMeta, setArticleMeta] = useState<{ provider_name: string; model: string } | null>(null)
   const [instruction, setInstruction] = useState('')
   const [form] = Form.useForm<GenerateForm>()
-
-  useEffect(() => {
-    listProviders()
-      .then((items) => setProviders(items.filter((p) => p.enabled)))
-      .catch(() => setProviders([]))
-  }, [])
 
   const latestOutlineKey = useMemo(() => {
     for (let i = chat.length - 1; i >= 0; i -= 1) {
@@ -176,7 +168,6 @@ function GeneratePage() {
         {
           topic: values.topic,
           keyword: values.keyword ?? '',
-          provider: values.provider,
           provider_api_keys: getProviderApiKeys(),
         },
         (event) => {
@@ -267,15 +258,10 @@ function GeneratePage() {
         <Form.Item name="keyword" label="目标关键词（可选）">
           <Input placeholder="如：langgraph tutorial" />
         </Form.Item>
-        <Form.Item name="provider" label="Provider（不选则用系统默认）">
-          <Select
-            allowClear
-            placeholder="系统默认"
-            options={providers.map((p) => ({
-              value: p.name,
-              label: `${p.name} (${p.default_model})${getProviderApiKey(p.id) ? '' : ' · 未配置 Key'}`,
-            }))}
-          />
+        <Form.Item label="Provider">
+          <Typography.Text type="secondary">
+            默认使用系统 Provider，可在 <Link to="/providers">Provider 管理</Link> 页面配置
+          </Typography.Text>
         </Form.Item>
         <Form.Item>
           <Button type="primary" loading={outlining && chat.length <= 1} onClick={() => void handleStart()}>

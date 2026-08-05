@@ -35,6 +35,7 @@ const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'ark', label: '火山方舟 (Ark)' },
+  { value: 'openai-compatible', label: 'OpenAI 兼容端点' },
 ]
 
 function ProvidersPage() {
@@ -47,6 +48,7 @@ function ProvidersPage() {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [manualModel, setManualModel] = useState(false)
   const [form] = Form.useForm<ProviderFormValues>()
+  const watchedType = Form.useWatch('type', form)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -258,6 +260,18 @@ function ProvidersPage() {
             <Select options={TYPE_OPTIONS} />
           </Form.Item>
           <Form.Item
+            name="base_url"
+            label="Base URL"
+            rules={[
+              {
+                required: watchedType === 'ark' || watchedType === 'openai-compatible',
+                message: '该类型必须提供 Base URL',
+              },
+            ]}
+          >
+            <Input placeholder="https://api.example.com/v1" />
+          </Form.Item>
+          <Form.Item
             name="api_key"
             label={
               editing
@@ -269,9 +283,9 @@ function ProvidersPage() {
           </Form.Item>
           <Form.Item label="模型" required>
             <Space.Compact style={{ width: '100%' }}>
-              {manualModel || modelOptions.length === 0 ? (
+              {manualModel || modelOptions.length === 0 || watchedType === 'openai-compatible' ? (
                 <Form.Item name="default_model" noStyle rules={[{ required: true, message: '请输入 model ID' }]}>
-                  <Input placeholder="获取失败后手动填写 model ID" />
+                  <Input placeholder="手动填写 model ID" />
                 </Form.Item>
               ) : (
                 <Form.Item name="default_model" noStyle rules={[{ required: true, message: '请选择模型' }]}>
@@ -285,7 +299,11 @@ function ProvidersPage() {
                   />
                 </Form.Item>
               )}
-              <Button loading={discovering} onClick={() => void handleDiscoverModels()}>
+              <Button
+                loading={discovering}
+                disabled={watchedType === 'openai-compatible'}
+                onClick={() => void handleDiscoverModels()}
+              >
                 获取模型
               </Button>
             </Space.Compact>

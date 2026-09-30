@@ -22,6 +22,18 @@ export TAVILY_API_KEY=tvly-...
 
 也可以在前端生成页填写 Tavily Key。前端只将 Key 保存在浏览器本地，并在研究请求中临时发送；服务端优先使用请求中的 Key，否则回退到 `TAVILY_API_KEY`。接口为 `POST /api/research/topic`。返回结果包含研究简报和参考来源；系统不会使用 Tavily 的 `include_answer`，也不会把 Tavily API Key 写入数据库。
 
+## RAG 知识库
+
+不配置任何 RAG 环境变量时功能整体关闭，生成主流程不受影响；配置后 `retrieve` 节点自动检索知识库并注入撰写 prompt：
+
+```bash
+export EMBEDDING_PROVIDER=openai        # openai / ark（OpenAI 兼容协议）
+export EMBEDDING_MODEL=text-embedding-3-small
+export VECTOR_STORE=memory              # memory（默认，零依赖）/ chroma（uv sync --extra chroma）
+```
+
+文档与分块的权威数据存 SQLite，向量索引是可重建的缓存（memory 索引重启后首次检索自动重建）。启动后调 `POST /api/rag/seed` 幂等导入 `data/corpus/` 内置语料，或在前端「知识库」页管理文档、测试检索。
+
 ## 测试
 
 ```bash

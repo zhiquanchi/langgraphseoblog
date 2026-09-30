@@ -197,3 +197,52 @@ class GraphResumeRequest(BaseModel):
         if self.action == "revise" and not (self.instruction or "").strip():
             raise ValueError("revise 必须提供 instruction")
         return self
+
+
+class RagDocumentIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=50_000)
+    source: str = Field(default="", max_length=512)
+
+
+class RagDocumentOut(BaseModel):
+    id: int
+    title: str
+    source: str
+    chunks: int
+    created_at: datetime
+
+
+class RagIngestOut(BaseModel):
+    doc_id: int
+    chunks: int
+
+
+class RagSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    k: int = Field(default=4, ge=1, le=20)
+
+
+class RagHit(BaseModel):
+    content: str
+    title: str
+    source: str
+    doc_id: int | None = None
+    score: float
+
+
+class RagSearchResponse(BaseModel):
+    query: str
+    hits: list[RagHit]
+
+
+class RagSeedResponse(BaseModel):
+    ingested: list[RagIngestOut]
+    skipped: list[str]
+
+
+class RagStatusOut(BaseModel):
+    enabled: bool
+    vector_store: str
+    doc_count: int
+    chunk_count: int

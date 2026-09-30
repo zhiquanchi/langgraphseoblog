@@ -21,6 +21,12 @@ from app.llm.stats import mask_sensitive
 from app.models import AppSettings, LLMCall, Provider
 from app.research import build_research_prompt, parse_research_result
 from app.research import collect_topic_sources
+from app.rag.service import (
+    KnowledgeService,
+    RagNotConfiguredError,
+    get_knowledge_service,
+    iter_corpus_documents,
+)
 from app.search import SearchProviderNotConfiguredError, get_search_provider
 from app.search.tavily import TavilySearchError
 
@@ -33,8 +39,9 @@ KNOWN_NODES = {
     "retrieve",
     "outline",
     "draft_section",
-    "assemble",
+    "seo_score",
     "seo_optimize",
+    "assemble",
     "review",
     "publish",
 }
@@ -389,16 +396,97 @@ def research_topic(payload: schemas.ResearchRequest) -> schemas.ResearchResponse
 
 
 # ---------------------------------------------------------------------------
+# RAG 知识库管理
+# ---------------------------------------------------------------------------
+
+
+def _rag_service() -> KnowledgeService:
+    """取知识库服务;embedding 配置错误归一为 503,由前端提示。"""
+    try:
+        return get_knowledge_service()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/rag/status", response_model=schemas.RagStatusOut)
+def rag_status() -> schemas.RagStatusOut:
+    service = get_knowledge_service()
+    docs = service.list_docs() if service.enabled else []
+    return schemas.RagStatusOut(
+        enabled=service.enabled,
+        vector_store=service.store_kind,
+        doc_count=len(docs),
+        chunk_count=service.chunk_count(),
+    )
+
+
+@router.get("/rag/documents", response_model=list[schemas.RagDocumentOut])
+def list_rag_documents() -> list[schemas.RagDocumentOut]:
+    return [schemas.RagDocumentOut(**doc) for doc in _rag_service().list_docs()]
+
+
+@router.post("/rag/documents", response_model=schemas.RagIngestOut, status_code=201)
+def add_rag_document(payload: schemas.RagDocumentIn) -> schemas.RagIngestOut:
+    try:
+        result = _rag_service().ingest(payload.title, payload.content, payload.source)
+    except RagNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.RagIngestOut(**result)
+
+
+@router.delete("/rag/documents/{doc_id}", status_code=204)
+def delete_rag_document(doc_id: int) -> Response:
+    if not _rag_service().delete(doc_id):
+        raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
+    return Response(status_code=204)
+
+
+@router.post("/rag/search", response_model=schemas.RagSearchResponse)
+def search_rag(payload: schemas.RagSearchRequest) -> schemas.RagSearchResponse:
+    try:
+        hits = _rag_service().search(payload.query, k=payload.k)
+    except RagNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return schemas.RagSearchResponse(
+        query=payload.query, hits=[schemas.RagHit(**hit) for hit in hits]
+    )
+
+
+@router.post("/rag/seed", response_model=schemas.RagSeedResponse)
+def seed_rag_corpus() -> schemas.RagSeedResponse:
+    """把 backend/data/corpus/ 内置语料入库;按来源文件名幂等跳过已导入文档。"""
+    service = _rag_service()
+    existing_sources = {doc["source"] for doc in service.list_docs()}
+    ingested: list[schemas.RagIngestOut] = []
+    skipped: list[str] = []
+    for item in iter_corpus_documents():
+        if item["source"] in existing_sources:
+            skipped.append(item["source"])
+            continue
+        try:
+            result = service.ingest(item["title"], item["content"], item["source"])
+        except RagNotConfiguredError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        ingested.append(schemas.RagIngestOut(**result))
+    return schemas.RagSeedResponse(ingested=ingested, skipped=skipped)
+
+
+# ---------------------------------------------------------------------------
 # 博客生成工作流（LangGraph + SSE）
 # ---------------------------------------------------------------------------
 #
 # SSE 事件序列：
 #   thread        新线程 ID（仅 start 接口首发）
-#   node          节点执行进度 {"node": "outline" | "review_outline" | "draft"}
+#   node          节点执行进度 {"node": "retrieve" | "outline" | "review_outline" | "draft" | "seo_score" | "seo_optimize"}
+#   rag_context   RAG 检索完成 {"count": int, "titles": [str]}
 #   outline_token 大纲 JSON token 流（前端可忽略，用于即时反馈）
 #   interrupt     大纲待确认 {"title": str, "outline": [str]}
-#   article_token 正文 token 流
-#   result        完成 {"article": str, "provider_name": str, "model": str}
+#   article_token 正文 token 流（首次撰写与 SEO 重写共用）
+#   seo_token     评分 JSON token 流（前端可忽略）
+#   seo_score     评分完成 {"score": float, "suggestions": [str]}
+#   result        完成 {"article", "provider_name", "model", "seo_score", "seo_revisions", "rag_sources"}
 #   error         失败 {"message": str}
 #   done          事件流结束
 
@@ -416,7 +504,8 @@ def _stream_graph(source: Any, config: dict[str, Any]) -> Iterator[str]:
     try:
         for mode, chunk in graph.stream(source, config, stream_mode=["updates", "custom"]):
             if mode == "custom":
-                yield _sse(chunk["type"], {"text": chunk["text"]})
+                payload = {key: value for key, value in chunk.items() if key != "type"}
+                yield _sse(chunk["type"], payload)
             elif "__interrupt__" in chunk:
                 pending = chunk["__interrupt__"][0].value
                 yield _sse("interrupt", pending)
@@ -431,6 +520,12 @@ def _stream_graph(source: Any, config: dict[str, Any]) -> Iterator[str]:
                     "article": final["article"],
                     "provider_name": final.get("provider_name", ""),
                     "model": final.get("model_name", ""),
+                    "seo_score": final.get("seo_score"),
+                    "seo_revisions": final.get("seo_revisions", 0),
+                    "rag_sources": [
+                        {"title": item["title"], "source": item["source"], "score": item["score"]}
+                        for item in final.get("rag_sources") or []
+                    ],
                 },
             )
     except Exception as exc:  # noqa: BLE001 — 流式中所有失败都经 error 事件返回前端

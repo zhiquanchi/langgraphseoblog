@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from collections import defaultdict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,20 +14,35 @@ from app.main import app
 OUTLINE_JSON = '{"title": "原始标题", "outline": ["第一节", "第二节"]}'
 REVISED_JSON = '{"title": "修订标题", "outline": ["新第一节", "新第二节", "新第三节"]}'
 ARTICLE = "# 原始标题\n\n第一节正文。\n\n## 第二节\n\n第二节正文。"
+REWRITE_SUGGESTION = "补充具体做法示例"
+REVISED_ARTICLE = "# 原始标题\n\n第一节正文（已按审核意见修订）。\n\n## 第二节\n\n第二节正文。"
 
 
 class FakeWrapper:
-    """按 prompt 内容区分大纲生成/修订/正文撰写的假模型。"""
+    """按节点与调用次序区分大纲/正文/评分/重写的假模型。
+
+    scores 控制每次 SEO 评分返回的分数：第 1 次取 scores[0]，第 2 次取
+    scores[1]……超出后沿用最后一个值。
+    """
 
     last_used = (None, "test-provider", "test-model")
 
-    def __init__(self) -> None:
+    def __init__(self, scores: tuple[float, ...] = (0.5, 0.9)) -> None:
         self.prompts: list[tuple[str | None, str]] = []
+        self.scores = scores
+        self._score_calls = 0
 
     def astream(self, prompt: str, *, node: str | None = None, thread_id: str | None = None):
         self.prompts.append((node, prompt))
         if node == "outline":
             text = REVISED_JSON if "用户修订要求" in prompt else OUTLINE_JSON
+        elif node == "seo_score":
+            score = self.scores[min(self._score_calls, len(self.scores) - 1)]
+            self._score_calls += 1
+            suggestions = [REWRITE_SUGGESTION] if score < 0.8 else []
+            text = json.dumps({"score": score, "suggestions": suggestions}, ensure_ascii=False)
+        elif node == "seo_optimize":
+            text = REVISED_ARTICLE
         else:
             text = ARTICLE
         # 模拟逐 token 流式输出
@@ -34,14 +50,17 @@ class FakeWrapper:
             yield char
 
 
-@pytest.fixture()
-def fake_model(monkeypatch) -> FakeWrapper:
-    wrapper = FakeWrapper()
+def install_fake_model(monkeypatch, wrapper: FakeWrapper) -> FakeWrapper:
     monkeypatch.setattr("app.graph.build_fallback_model", lambda *args, **kwargs: wrapper)
     monkeypatch.setattr(
         "app.api.routes.build_fallback_model", lambda *args, **kwargs: wrapper
     )
     return wrapper
+
+
+@pytest.fixture()
+def fake_model(monkeypatch) -> FakeWrapper:
+    return install_fake_model(monkeypatch, FakeWrapper())
 
 
 def _new_config() -> dict:
@@ -61,10 +80,11 @@ def _start_state() -> dict:
 def _run(source, config) -> tuple[list[dict], dict[str, str]]:
     """驱动图执行，收集 interrupt 载荷与自定义 token 流。"""
     interrupts: list[dict] = []
-    tokens: dict[str, list[str]] = {"outline_token": [], "article_token": []}
+    tokens: defaultdict[str, list[str]] = defaultdict(list)
     for mode, chunk in graph.stream(source, config, stream_mode=["updates", "custom"]):
         if mode == "custom":
-            tokens[chunk["type"]].append(chunk["text"])
+            if chunk["type"].endswith("_token"):
+                tokens[chunk["type"]].append(chunk["text"])
         elif "__interrupt__" in chunk:
             interrupts.append(chunk["__interrupt__"][0].value)
     return interrupts, {kind: "".join(parts) for kind, parts in tokens.items()}
@@ -89,7 +109,7 @@ def test_graph_outline_interrupt_revise_approve(fake_model) -> None:
     revise_prompts = [p for node, p in fake_model.prompts if node == "outline"]
     assert any("增加一节性能优化" in p for p in revise_prompts)
 
-    # 确认（附手动编辑后的大纲）：流式撰写正文直至完成
+    # 确认（附手动编辑后的大纲）：流式撰写正文 → SEO 评分不足 → 重写 → 复评达标
     interrupts, tokens = _run(
         Command(
             resume={
@@ -101,14 +121,23 @@ def test_graph_outline_interrupt_revise_approve(fake_model) -> None:
         config,
     )
     assert interrupts == []
-    assert tokens["article_token"] == ARTICLE
+    assert tokens["article_token"] == ARTICLE + REVISED_ARTICLE
     final = graph.get_state(config).values
-    assert final["article"] == ARTICLE
+    assert final["article"] == REVISED_ARTICLE
     assert final["title"] == "手动改后的标题"
+    assert final["seo_score"] == 0.9
+    assert final["seo_revisions"] == 1
+
     draft_prompts = [p for node, p in fake_model.prompts if node == "draft_section"]
     assert len(draft_prompts) == 1
     assert "手动一节" in draft_prompts[0]
     assert "手动改后的标题" in draft_prompts[0]
+
+    optimize_prompts = [p for node, p in fake_model.prompts if node == "seo_optimize"]
+    assert len(optimize_prompts) == 1
+    assert REWRITE_SUGGESTION in optimize_prompts[0]
+    score_prompts = [p for node, p in fake_model.prompts if node == "seo_score"]
+    assert len(score_prompts) == 2  # 初评 + 重写后复评
 
 
 def _parse_sse(body: str) -> list[tuple[str, dict]]:
@@ -129,6 +158,7 @@ def test_sse_start_and_resume_flow(fake_model) -> None:
     events = _parse_sse(start.text)
     kinds = [kind for kind, _ in events]
     assert kinds[0] == "thread"
+    assert "rag_context" in kinds  # 知识库未配置时降级为 count=0，不阻塞流程
     assert "outline_token" in kinds
     assert "interrupt" in kinds
     assert kinds[-1] == "done"
@@ -143,14 +173,17 @@ def test_sse_start_and_resume_flow(fake_model) -> None:
     events = _parse_sse(resume.text)
     kinds = [kind for kind, _ in events]
     assert "article_token" in kinds
+    assert "seo_score" in kinds
     result = next(data for kind, data in events if kind == "result")
-    assert result["article"] == ARTICLE
+    assert result["article"] == REVISED_ARTICLE
+    assert result["seo_score"] == 0.9
+    assert result["seo_revisions"] == 1
     assert result["provider_name"] == "test-provider"
 
     article = "".join(
         data["text"] for kind, data in events if kind == "article_token"
     )
-    assert article == ARTICLE
+    assert article == ARTICLE + REVISED_ARTICLE
 
 
 def test_sse_resume_revise_streams_new_outline(fake_model) -> None:

@@ -21,3 +21,4 @@ frontend/dist/
 # Local runtime artifacts
 *.db
 qwen-code-export-*.json
+backend/data/chroma/

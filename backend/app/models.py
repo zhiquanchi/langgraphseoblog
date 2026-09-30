@@ -72,3 +72,27 @@ class LLMCall(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     failover_from: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+
+
+class KnowledgeDoc(Base):
+    """知识库文档（权威存储）：向量索引是可重建的缓存，事实以本表为准。"""
+
+    __tablename__ = "knowledge_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    source: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+
+
+class KnowledgeChunk(Base):
+    """文档分块：入库时切分并持久化，重启后据此重建向量索引。"""
+
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (Index("idx_knowledge_chunks_doc", "doc_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # "{doc_id}:{seq}"
+    doc_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)

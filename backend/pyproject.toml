@@ -12,7 +12,13 @@ dependencies = [
     "langchain-core>=0.3",
     "langchain-openai>=0.2",
     "langchain-anthropic>=0.2",
+    "langchain-text-splitters>=0.3",
+    "numpy>=1.26",
 ]
+
+[project.optional-dependencies]
+# VECTOR_STORE=chroma 时需要：uv sync --extra chroma
+chroma = ["langchain-chroma>=0.2"]
 
 [dependency-groups]
 dev = [

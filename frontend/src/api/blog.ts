@@ -1,6 +1,12 @@
 // 博客生成工作流 API：LangGraph + SSE 流式
-// 事件序列：thread → node/outline_token → interrupt（待确认）
-//          →（approve 后）node/article_token → result → done
+// 事件序列：thread → node/rag_context/outline_token → interrupt（待确认）
+//          →（approve 后）node/article_token → seo_score（不足时自动重写再评分）→ result → done
+
+export interface RagSourceRef {
+  title: string
+  source: string
+  score: number
+}
 
 export interface GraphStartPayload {
   topic: string
@@ -23,19 +29,33 @@ export interface GraphApprovePayload {
 export type GraphEvent =
   | { type: 'thread'; threadId: string }
   | { type: 'node'; node: string }
+  | { type: 'rag_context'; count: number; titles: string[] }
   | { type: 'outline_token'; text: string }
   | { type: 'interrupt'; title: string; outline: string[] }
   | { type: 'article_token'; text: string }
-  | { type: 'result'; article: string; provider_name: string; model: string }
+  | { type: 'seo_token'; text: string }
+  | { type: 'seo_score'; score: number; suggestions: string[] }
+  | {
+      type: 'result'
+      article: string
+      provider_name: string
+      model: string
+      seo_score: number | null
+      seo_revisions: number
+      rag_sources: RagSourceRef[]
+    }
   | { type: 'error'; message: string }
   | { type: 'done' }
 
 const EVENT_TYPES = new Set([
   'thread',
   'node',
+  'rag_context',
   'outline_token',
   'interrupt',
   'article_token',
+  'seo_token',
+  'seo_score',
   'result',
   'error',
   'done',
@@ -55,6 +75,12 @@ function parseEventBlock(block: string): GraphEvent | null {
       return { type: 'thread', threadId: String(parsed.thread_id) }
     case 'node':
       return { type: 'node', node: String(parsed.node) }
+    case 'rag_context':
+      return {
+        type: 'rag_context',
+        count: Number(parsed.count ?? 0),
+        titles: (parsed.titles as string[]) ?? [],
+      }
     case 'outline_token':
       return { type: 'outline_token', text: String(parsed.text) }
     case 'interrupt':
@@ -65,12 +91,23 @@ function parseEventBlock(block: string): GraphEvent | null {
       }
     case 'article_token':
       return { type: 'article_token', text: String(parsed.text) }
+    case 'seo_token':
+      return { type: 'seo_token', text: String(parsed.text) }
+    case 'seo_score':
+      return {
+        type: 'seo_score',
+        score: Number(parsed.score ?? 0),
+        suggestions: (parsed.suggestions as string[]) ?? [],
+      }
     case 'result':
       return {
         type: 'result',
         article: String(parsed.article),
         provider_name: String(parsed.provider_name),
         model: String(parsed.model),
+        seo_score: parsed.seo_score === null ? null : Number(parsed.seo_score),
+        seo_revisions: Number(parsed.seo_revisions ?? 0),
+        rag_sources: (parsed.rag_sources as RagSourceRef[]) ?? [],
       }
     case 'error':
       return { type: 'error', message: String(parsed.message) }

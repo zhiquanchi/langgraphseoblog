@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Flex, Form, Input, Skeleton, Typography, message } from 'antd'
+import { Button, Card, Flex, Form, Input, Skeleton, Space, Tag, Typography, message } from 'antd'
 import { Link } from 'react-router-dom'
 import { Bubble, Sender } from '@ant-design/x'
 import type { BubbleItemType } from '@ant-design/x'
 import { resumeBlogThread, startBlogThread } from '../api/blog'
-import type { GraphEvent } from '../api/blog'
+import type { GraphEvent, RagSourceRef } from '../api/blog'
 import { getProviderApiKeys } from '../api/providers'
 
 const { Title, Paragraph } = Typography
@@ -17,6 +17,17 @@ interface GenerateForm {
 interface OutlineDraft {
   title: string
   outline: string[]
+}
+
+interface RagContextInfo {
+  count: number
+  titles: string[]
+}
+
+interface SeoInfo {
+  score: number | null
+  suggestions: string[]
+  revisions: number
 }
 
 type ChatItem =
@@ -128,6 +139,9 @@ function GeneratePage() {
   const [finished, setFinished] = useState(false)
   const [article, setArticle] = useState('')
   const [articleMeta, setArticleMeta] = useState<{ provider_name: string; model: string } | null>(null)
+  const [ragContext, setRagContext] = useState<RagContextInfo | null>(null)
+  const [ragSources, setRagSources] = useState<RagSourceRef[]>([])
+  const [seoInfo, setSeoInfo] = useState<SeoInfo | null>(null)
   const [instruction, setInstruction] = useState('')
   const [form] = Form.useForm<GenerateForm>()
 
@@ -146,6 +160,8 @@ function GeneratePage() {
         ...dropLoading(prev),
         { key: nextChatKey(), kind: 'outline', title: next.title, outline: next.outline },
       ])
+    } else if (event.type === 'rag_context') {
+      setRagContext(event.count > 0 ? { count: event.count, titles: event.titles } : null)
     } else if (event.type === 'error') {
       setChat(dropLoading)
       message.error(event.message)
@@ -161,6 +177,9 @@ function GeneratePage() {
     setDraft(null)
     setArticle('')
     setArticleMeta(null)
+    setRagContext(null)
+    setRagSources([])
+    setSeoInfo(null)
     setFinished(false)
     setOutlining(true)
     try {
@@ -211,8 +230,19 @@ function GeneratePage() {
         (event) => {
           if (event.type === 'article_token') {
             setArticle((prev) => prev + event.text)
+          } else if (event.type === 'node' && event.node === 'seo_optimize') {
+            // SEO 重写开始：清空旧稿，让修订稿流式覆盖
+            setArticle('')
+          } else if (event.type === 'seo_score') {
+            setSeoInfo((prev) => ({
+              score: event.score,
+              suggestions: event.suggestions,
+              revisions: prev?.revisions ?? 0,
+            }))
           } else if (event.type === 'result') {
             setArticleMeta({ provider_name: event.provider_name, model: event.model })
+            setSeoInfo({ score: event.seo_score, suggestions: [], revisions: event.seo_revisions })
+            setRagSources(event.rag_sources ?? [])
             setFinished(true)
           } else if (event.type === 'error') {
             message.error(event.message)
@@ -272,6 +302,11 @@ function GeneratePage() {
 
       {chat.length > 0 && (
         <Card title="大纲确认" style={{ maxWidth: 900, marginTop: 24 }}>
+          {ragContext && ragContext.count > 0 && (
+            <Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              已检索知识库 {ragContext.count} 条参考：{ragContext.titles.join('、')}
+            </Paragraph>
+          )}
           <Bubble.List items={bubbleItems} style={{ maxHeight: 480 }} />
           {!finished && (
             <Flex vertical gap={12} style={{ marginTop: 16 }}>
@@ -304,6 +339,20 @@ function GeneratePage() {
 
       {(generating || article) && (
         <Card title="生成文章" style={{ maxWidth: 900, marginTop: 24 }}>
+          {seoInfo?.score !== null && seoInfo && (
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Tag color={seoInfo.score >= 0.8 ? 'green' : 'orange'}>
+                SEO 评分 {seoInfo.score?.toFixed(2)}
+              </Tag>
+              {seoInfo.revisions > 0 && <Tag color="blue">SEO 重写 {seoInfo.revisions} 次</Tag>}
+              {ragSources.length > 0 && <Tag>知识库参考 {ragSources.length} 条</Tag>}
+            </Space>
+          )}
+          {seoInfo && seoInfo.suggestions.length > 0 && (
+            <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+              审核建议：{seoInfo.suggestions.join('；')}
+            </Paragraph>
+          )}
           {generating && !article ? (
             <Skeleton active paragraph={{ rows: 14 }} />
           ) : (

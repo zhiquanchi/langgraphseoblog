@@ -1,6 +1,7 @@
 import { Layout, Menu } from 'antd'
 import { Link, Route, Routes, useLocation } from 'react-router-dom'
 import GeneratePage from './pages/GeneratePage'
+import KnowledgePage from './pages/KnowledgePage'
 import ProvidersPage from './pages/ProvidersPage'
 import StatsPage from './pages/StatsPage'
 
@@ -12,7 +13,9 @@ function App() {
     ? '/providers'
     : location.pathname.startsWith('/stats')
       ? '/stats'
-      : '/'
+      : location.pathname.startsWith('/knowledge')
+        ? '/knowledge'
+        : '/'
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -23,6 +26,7 @@ function App() {
           selectedKeys={[selectedKey]}
           items={[
             { key: '/', label: <Link to="/">博客生成</Link> },
+            { key: '/knowledge', label: <Link to="/knowledge">知识库</Link> },
             { key: '/providers', label: <Link to="/providers">Provider 管理</Link> },
             { key: '/stats', label: <Link to="/stats">调用统计</Link> },
           ]}
@@ -31,6 +35,7 @@ function App() {
       <Content style={{ padding: 24 }}>
         <Routes>
           <Route path="/" element={<GeneratePage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/stats" element={<StatsPage />} />
         </Routes>

@@ -36,4 +36,3 @@ npm run lint                     # oxlint
 
 - 代码注释、文档、错误提示、commit message 均用中文；commit 遵循 `feat(backend): ...` / `fix(frontend): ...` 风格。
 - 前端统一走 `src/api/client.ts` 的 `http` 封装（相对路径 `/api`，错误取 `detail`/`message`）；页面在 `src/pages/`（生成/知识库/Provider/统计四页）。
-- `tasks/` 保存 Spec 驱动开发文档（PRD → SPEC → issue-001~009），做大改动前可先读对应 issue 了解设计意图。

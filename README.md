@@ -160,10 +160,9 @@ langgraphseoblog/
 │   │   └── search/tavily.py       # Tavily 搜索适配
 │   ├── data/corpus/               # 内置 RAG 示例语料（一键导入）
 │   └── tests/                     # 48 个测试：图流程 / SSE / RAG（含 Qdrant）/ 降级 / 工厂 / 研究
-├── frontend/src/
-│   ├── pages/                     # 博客生成 / 知识库 / Provider 管理 / 调用统计
-│   └── api/                       # 后端 API 客户端封装（含 SSE 解析）
-└── tasks/                         # Spec 驱动开发：PRD → SPEC → 9 个 issue
+└── frontend/src/
+    ├── pages/                     # 博客生成 / 知识库 / Provider 管理 / 调用统计
+    └── api/                       # 后端 API 客户端封装（含 SSE 解析）
 ```
 
 ## 🚀 快速开始

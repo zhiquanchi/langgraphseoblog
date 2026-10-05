@@ -59,6 +59,19 @@ def test_env_embeddings_batches_to_provider_limit(monkeypatch) -> None:
     assert embeddings.openai_api_base == DEFAULT_BASE_URL
     # 百炼单次请求上限 10 条，langchain 默认 1000 会整批 400
     assert embeddings.chunk_size == 10
+    # 百炼兼容端点只收字符串输入，langchain 默认发 token 整数数组会 400
+    assert embeddings.check_embedding_ctx_length is False
+
+
+def test_env_embeddings_ark_sends_raw_strings(monkeypatch) -> None:
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "ark")
+    monkeypatch.setenv("ARK_API_KEY", "ak-ark")
+    monkeypatch.setenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+
+    embeddings = build_env_embeddings()
+    assert isinstance(embeddings, OpenAIEmbeddings)
+    assert embeddings.check_embedding_ctx_length is False
 
 
 def test_embeddings_reject_missing_dashscope_key(monkeypatch) -> None:

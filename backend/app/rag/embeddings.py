@@ -33,6 +33,8 @@ def build_env_embeddings() -> Embeddings | None:
             model=model or "doubao-embedding",
             api_key=_require_env("ARK_API_KEY"),
             base_url=_require_env("ARK_BASE_URL"),
+            # 兼容端点不接受 langchain 默认的 token 整数数组输入，必须发原始字符串
+            check_embedding_ctx_length=False,
         )
     if provider in PROVIDER_ALIASES:
         return OpenAIEmbeddings(
@@ -41,6 +43,8 @@ def build_env_embeddings() -> Embeddings | None:
             base_url=resolve_base_url(),
             # 默认 1000 条一批，百炼上限 10 条，整篇文档入库会直接 400
             chunk_size=MAX_EMBED_BATCH,
+            # 同上：百炼兼容端点只收字符串，langchain 默认会发 token 数组导致 400
+            check_embedding_ctx_length=False,
         )
     raise ValueError(f"未知的 EMBEDDING_PROVIDER: {provider}")
 

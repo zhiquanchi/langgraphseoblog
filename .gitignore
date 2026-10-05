@@ -19,7 +19,9 @@ frontend/dist/
 *.log
 
 # Local runtime artifacts
+.env
 *.db
 qwen-code-export-*.json
 .zcode/
+.zcodeignore
 backend/data/qdrant/

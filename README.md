@@ -1,13 +1,26 @@
 # LangGraph SEO Blog
 
-基于 **LangGraph** 的 AI SEO 博客生成器：输入一个主题，走完 **知识库检索（RAG）→ 大纲生成 → 人工确认/对话式修订（interrupt）→ 流式撰写 → SEO 评分 ⇄ 自动重写** 的完整工作流，全程 SSE 实时推送。配套多 LLM Provider 管理与故障自动转移层。
+基于 **LangGraph** 的 AI SEO 博客生成器：输入一个主题，走完 **知识库检索（RAG）→ 大纲生成 → 人工确认/对话式修订（interrupt）→ 流式撰写 → SEO 评分 ⇄ 自动重写** 的完整工作流，全程 SSE 实时推送，配套多 LLM Provider 管理与故障自动转移层。
 
+[![CI](https://github.com/zhiquanchi/langgraphseoblog/actions/workflows/ci.yml/badge.svg)](https://github.com/zhiquanchi/langgraphseoblog/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)
 ![React](https://img.shields.io/badge/React-19-61DAFB)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6)
-![tests](https://img.shields.io/badge/tests-36%20passed-3DDC84)
+![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+> **6** 节点状态图 · **5** 种自定义 SSE 事件 · **47** 个自动化测试（CI 持续运行） · 向量库**零外部进程**（嵌入式 Qdrant） · API Key **不落服务端**
+
+## 🖥️ 界面演示
+
+| 大纲确认（interrupt：可编辑 + 对话式修订） | 流式撰写 + SEO 评分闭环 |
+| --- | --- |
+| ![大纲确认](docs/images/generate-review.png) | ![流式撰写与 SEO 评分](docs/images/generate-draft.png) |
+
+| 知识库（RAG：语料入库与语义检索） | 调用统计（按 Provider / 节点聚合） |
+| --- | --- |
+| ![知识库检索](docs/images/knowledge.png) | ![调用统计](docs/images/stats.png) |
 
 ## ✨ 功能特性
 
@@ -15,12 +28,20 @@
 - **Human-in-the-loop 大纲确认**：`interrupt` 暂停后，用户可以确认、手动编辑标题/大纲，或用自然语言下修订指令让模型重新生成（对话式修订自循环）
 - **SEO 质量闭环**：draft 后由 `seo_score` 节点按关键词覆盖/结构/内容深度评分，低于阈值自动回到 `seo_optimize` 按建议重写并复评；重写次数有上限，不会死循环
 - **RAG 知识检索**：内置 SEO 语料一键入库；SQLite 存权威文档与分块，向量索引固定使用 **Qdrant**（默认本地嵌入式文件模式零外部进程，配 `QDRANT_URL` 可连服务端实例）；索引丢失时首次检索自动从 SQLite 全量重建；检索片段带来源，注入撰写 prompt 做引用溯源
-- **多 LLM Provider 管理**：Provider CRUD / 连通性测试 / 模型列表自动发现 / 按节点路由 / fallback 链；**API Key 只存用户浏览器本地，后端不留存**
+- **多 LLM Provider 管理**：Provider CRUD / 连通性测试 / 模型列表自动发现 / fallback 链 / 按节点路由（`PUT /api/settings/llm`，API 配置）；**API Key 只存用户浏览器本地，后端不留存**
 - **故障自动转移（FallbackChatModel）**：认证失败 / 限流 / 超时 / 5xx 自动切换候选 Provider，4xx 业务错误立即抛出；**流式模式下仅首 token 产生前允许切换**；每次尝试写入调用统计与 failover 链路
 - **SSE 流式输出**：大纲 token、正文 token、SEO 评分、RAG 检索结果全部以自定义事件实时推送，SEO 重写时前端可见修订稿逐字覆盖旧稿
 - **调用统计**：按 Provider / 按节点的调用量、成功率、token、延迟、failover 次数，独立统计页展示
-- **Tavily 联网选题研究**：独立端点返回结构化选题简报（受众 / 搜索意图 / 内容角度 / 竞品缺口 / 推荐大纲）
+- **Tavily 联网选题研究（API 端点）**：`POST /api/research/topic` 返回结构化选题简报（受众 / 搜索意图 / 内容角度 / 竞品缺口 / 推荐大纲），暂未接入工作流图（见 Roadmap）
 - **前后端分离 monorepo**：FastAPI + SQLAlchemy；React 19 + antd 6 + @ant-design/x
+
+## 🎯 核心亮点（工程决策 → 落地方式）
+
+1. **流式故障转移的安全边界**：LLM 流式输出中途切 Provider 会导致内容重复/错乱。`FallbackChatModel` 只在**首 token 产生前**允许切换候选；可降级异常精确分类（401/403/429/超时/5xx 才切换，其余 4xx 立即抛出不浪费重试），状态码沿 `__cause__` 异常链逐层提取。
+2. **真正可用的 Human-in-the-loop**：大纲确认不是一次性问答。`interrupt` 暂停后按 resume 载荷分流——`revise` 带自然语言指令回 `outline` 自循环（可多轮），`approve` 可附用户手动编辑的标题/大纲；`MemorySaver` checkpointer 按 `thread_id` 恢复中断线程。
+3. **RAG 是增强项，不是阻塞项**：`EMBEDDING_PROVIDER` 未配置或向量库故障时，`retrieve` 节点**静默降级跳过，绝不阻塞生成主流程**（有测试覆盖）。权威数据与索引分离：SQLite 是唯一权威，Qdrant 只是可重建缓存——集合被清空后首次检索自动全量重建，无需重新导入。
+4. **SEO 闭环有预算、不死循环**：条件边路由 `route_after_seo_score` 以「阈值 0.8 + 重写上限 2 次」双闸门控制 `seo_score ⇄ seo_optimize` 循环，质量不达标才重写，预算用尽强制放行。
+5. **API Key 零落地后端**：Key 只存浏览器 localStorage，随请求传入、仅本次构建使用（模型工厂缓存键只含 Key 哈希）；调用统计的错误信息脱敏后才入库。
 
 ## 🧠 架构总览
 
@@ -124,7 +145,7 @@ return {"title": decision.get("title") or state["title"],
 
 `FallbackChatModel`（`app/llm/fallback.py`）按候选链顺序尝试调用，是本项目的工程核心：
 
-- **可降级异常精确分类**：认证失败 / 限流 / 超时 / 5xx 才切换候选；其余 4xx 业务错误立即抛出，不浪费重试。状态码沿 `__cause__` 异常链递归提取
+- **可降级异常精确分类**：认证失败 / 限流 / 超时 / 5xx 才切换候选；其余 4xx 业务错误立即抛出，不浪费重试。状态码沿 `__cause__` 异常链逐层提取
 - **流式降级边界**：仅首 token 产生前的失败允许切换；已经开始向用户输出后失败直接报错，避免内容重复/错乱
 - **异步流跨线程消费**：`_drain_async_stream` 用独立事件循环 + 守护线程 + 队列把 async 流统一成同步迭代器，异常原样上抛
 - **调用统计**：每次尝试（含失败）记录 token / 延迟 / `failover_from` 链路到 `llm_calls` 表；错误信息脱敏后入库与展示
@@ -136,6 +157,7 @@ return {"title": decision.get("title") or state["title"],
 
 ```
 langgraphseoblog/
+├── .github/workflows/ci.yml       # CI：后端 pytest + 前端 tsc/vite 构建
 ├── docker-compose.yml             # 可选：Qdrant 向量库服务实例（qdrant/qdrant:v1.19.1）
 ├── backend/
 │   ├── app/
@@ -159,7 +181,7 @@ langgraphseoblog/
 │   │   │   └── embeddings.py      # EMBEDDING_PROVIDER → Embeddings（OpenAI 兼容）
 │   │   └── search/tavily.py       # Tavily 搜索适配
 │   ├── data/corpus/               # 内置 RAG 示例语料（一键导入）
-│   └── tests/                     # 46 个测试：图流程 / SSE / RAG（Qdrant 往返与重建）/ 降级 / 工厂 / 研究
+│   └── tests/                     # 47 个测试：图流程 / SSE / RAG（Qdrant 往返与重建）/ 降级 / 工厂 / 研究
 └── frontend/src/
     ├── pages/                     # 博客生成 / 知识库 / Provider 管理 / 调用统计
     └── api/                       # 后端 API 客户端封装（含 SSE 解析）
@@ -167,12 +189,20 @@ langgraphseoblog/
 
 ## 🚀 快速开始
 
-### 环境要求
+- 环境要求：Python ≥ 3.11（[uv](https://docs.astral.sh/uv/) 管理）、Node.js ≥ 20、至少一个 LLM 的 API Key
+- 向量库默认走**本地嵌入式 Qdrant**，零外部进程、零配置；Docker 可选（仅服务端模式需要）
 
-- Python ≥ 3.11（后端，使用 [uv](https://docs.astral.sh/uv/) 管理）
-- Node.js ≥ 20（前端）
-- 至少一个 LLM 的 API Key（页面上配置并保存在浏览器本地，或走环境变量）
-- Docker（可选）：仅向量库走 Qdrant 服务端模式时需要；不装也能用默认的本地嵌入式模式
+```bash
+# 1. 后端（端口 8000）
+cd backend && uv sync && uv run uvicorn app.main:app --reload
+
+# 2. 前端（另开终端，端口 5173，/api 已代理到后端）
+cd frontend && npm install && npm run dev
+
+# 3. 打开 http://localhost:5173
+#    在「Provider 管理」页配置模型与 API Key（仅存浏览器本地），
+#    再到「博客生成」页输入主题即可体验完整工作流
+```
 
 ### Qdrant 向量库的两种跑法
 
@@ -191,30 +221,14 @@ export QDRANT_URL=http://localhost:6333
 
 `QDRANT_URL` 一旦设置就优先于 `QDRANT_DIR`；`docker compose down -v` 或删掉 `data/qdrant` 清掉向量数据后，SQLite 里的文档与分块不受影响，首次检索会自动从 SQLite 重建索引（无需重新导入语料）。
 
-### 启动后端（端口 8000）
+### 进阶配置（可选）
 
-```bash
-cd backend
-uv sync                # Qdrant 为主依赖，无需额外 extras
-uv run uvicorn app.main:app --reload
-```
-
-### 启动前端（端口 5173，`/api` 已代理到后端）
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### 配置
-
-复制 `backend/.env.example` 为 `backend/.env`，按需配置：
+推荐 Provider 与 API Key 直接在前端「Provider 管理」页配置（Key 仅存浏览器本地）；系统未配置任何 Provider 时才回退到环境变量模式。复制 `backend/.env.example` 为 `backend/.env` 并按需配置（后端只读环境变量、不自动加载 `.env`，需用 `uv run --env-file .env uvicorn app.main:app --reload` 启动）：
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `LLM_PROVIDER` | 环境变量回退模式：`openai` / `anthropic` / `ark` / `dashscope`（等价 `aliyun`、`bailian`） | `openai` |
-| `DASHSCOPE_API_KEY` | 阿里云百炼 API Key（`LLM_PROVIDER` 或 `EMBEDDING_PROVIDER` 为 `dashscope` 时必填） | 未设置 |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ARK_API_KEY` / `DASHSCOPE_API_KEY` | 回退模式下对应 Provider 的 Key（各 Provider 另有 `*_MODEL` / `*_BASE_URL` 可选变量，见 `.env.example`） | 未设置 |
 | `DASHSCOPE_MODEL` | 百炼对话模型名 | `qwen-plus` |
 | `DASHSCOPE_BASE_URL` | 百炼 OpenAI 兼容端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `EMBEDDING_PROVIDER` | RAG 向量化：`openai` / `ark` / `dashscope`（OpenAI 兼容协议）；**不配置则 RAG 关闭，主流程不受影响** | 未设置 |
@@ -223,8 +237,6 @@ npm run dev
 | `QDRANT_URL` | Qdrant 服务端地址，填了优先于 `QDRANT_DIR` | 未设置 |
 | `QDRANT_API_KEY` | Qdrant 服务端 API Key / 云实例凭证 | 未设置 |
 | `QDRANT_COLLECTION` | Qdrant 集合名（按 embedding 维度自动创建，cosine） | `seo_knowledge` |
-
-Provider 与 API Key 推荐直接在前端「Provider 管理」页配置（Key 仅存浏览器本地）；系统未配置任何 Provider 时回退到上面的环境变量模式。
 
 选「阿里云百炼 (DashScope)」类型时可留空 Base URL（自动用北京区兼容端点），点「获取模型」会拉取账号可用模型列表。RAG 侧注意两点：百炼 embeddings 单次请求上限 10 条文本（入库已按 10 条分批），`text-embedding-v4` 默认 1024 维，与 OpenAI 的 1536 维不通用，切换后删掉 `data/qdrant` 目录或对应集合即可，首次检索会用新 embedding 自动重建索引。
 
@@ -235,24 +247,28 @@ Provider 与 API Key 推荐直接在前端「Provider 管理」页配置（Key �
 | `GET` | `/api/health` | 健康检查 |
 | `POST` | `/api/blog/threads` | 启动工作流（SSE）：RAG 检索 → 大纲 → interrupt 暂停 |
 | `POST` | `/api/blog/threads/{id}/resume` | 恢复工作流（SSE）：`revise` 修订大纲 / `approve` 确认并撰写 + SEO 循环 |
+| `POST` | `/api/blog/generate` | 非流式单次生成（legacy 旧入口，前端已不使用） |
 | `POST` | `/api/research/topic` | Tavily 联网选题研究，返回结构化简报 |
 | `GET` / `POST` | `/api/rag/documents` | 知识库文档列表 / 入库（自动切分） |
 | `DELETE` | `/api/rag/documents/{id}` | 删除文档（同步清理向量索引） |
 | `POST` | `/api/rag/search` | 知识库检索（带来源与相似度） |
 | `POST` | `/api/rag/seed` | 幂等导入内置语料 |
 | `GET` | `/api/rag/status` | RAG 状态：是否启用 / 向量库类型 / 文档与分块数 |
-| `GET` / `POST` / `PATCH` / `DELETE` | `/api/providers` | Provider CRUD（含连通性测试、模型列表发现） |
-| `GET` / `PUT` | `/api/settings/llm` | 默认 Provider / fallback 链 / 节点级路由 |
+| `GET` / `POST` / `PATCH` / `DELETE` | `/api/providers` | Provider CRUD |
+| `GET` | `/api/providers/catalog` | Provider 类型目录（前端表单选项来源） |
+| `POST` | `/api/providers/{id}/test` | 连通性测试 |
+| `GET` | `/api/providers/{id}/models` | 模型列表自动发现 |
+| `GET` / `PUT` | `/api/settings/llm` | 默认 Provider / fallback 链 / 节点级路由（API 配置） |
 | `GET` | `/api/llm/stats` `/api/llm/calls` | 按 Provider/节点聚合的调用统计与明细 |
 
 ## 测试
 
 ```bash
-cd backend && uv run pytest     # 46 个测试：图流程(interrupt/修订/SEO 循环)、SSE、RAG(Qdrant 往返与重建)、降级边界、工厂与解析
+cd backend && uv run pytest     # 47 passed + 1 skipped（Qdrant 服务端冒烟，设 QDRANT_SMOKE_URL 才跑）
 cd frontend && npm run build    # 前端类型检查 + 构建
 ```
 
-工作流测试使用 FakeWrapper 模拟逐 token 流式输出，按节点与调用次序返回不同结果（如 SEO 评分第一次 0.5、复评 0.9），无需真实 API Key；RAG 测试用确定性假 embedding 驱动 `InMemoryVectorStore`。
+全部测试无需真实 API Key，在 CI 中持续运行：工作流测试用 FakeWrapper 模拟逐 token 流式输出，按节点与调用次序返回不同结果（如 SEO 评分第一次 0.5、复评 0.9），覆盖 interrupt/修订/SEO 循环、SSE 事件序列与降级边界；RAG 测试用确定性假 embedding 驱动**真实的嵌入式 Qdrant**（每用例独立 tmp 目录），覆盖入库/检索/删除往返与「索引被清空后从 SQLite 自动重建」。
 
 ## 🗺️ Roadmap
 

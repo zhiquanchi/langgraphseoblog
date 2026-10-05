@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.dashscope import DEFAULT_BASE_URL
+
 
 @dataclass(frozen=True)
 class ProviderCatalog:
@@ -26,6 +28,12 @@ CATALOG: dict[str, ProviderCatalog] = {
     ),
     "ark": ProviderCatalog(
         "ark", "火山方舟 (Ark)", "https://www.volcengine.com/docs/82379/1330310", "https://ark.cn-beijing.volces.com/api/v3/models"
+    ),
+    "dashscope": ProviderCatalog(
+        "dashscope",
+        "阿里云百炼 (DashScope)",
+        "https://help.aliyun.com/zh/model-studio/models",
+        f"{DEFAULT_BASE_URL}/models",
     ),
 }
 

@@ -11,6 +11,7 @@ class ProviderType(StrEnum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     ARK = "ark"
+    DASHSCOPE = "dashscope"
     OPENAI_COMPATIBLE = "openai-compatible"
 
 

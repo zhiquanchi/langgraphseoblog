@@ -8,6 +8,12 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from app.dashscope import (
+    DEFAULT_BASE_URL,
+    DEFAULT_CHAT_MODEL,
+    PROVIDER_ALIASES,
+    resolve_base_url,
+)
 from app.db import SessionLocal
 from app.models import Provider
 
@@ -53,6 +59,12 @@ def _build_model(
         return ChatOpenAI(model=model_name, api_key=api_key)
     if provider.type == "anthropic":
         return ChatAnthropic(model=model_name, api_key=api_key)
+    if provider.type == "dashscope":
+        return ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=provider.base_url or DEFAULT_BASE_URL,
+        )
     if provider.type in ("ark", "openai-compatible"):
         if not provider.base_url:
             raise ValueError(f"Provider {provider.id} 类型 {provider.type} 必须提供 base_url")
@@ -90,5 +102,11 @@ def build_env_chat_model() -> BaseChatModel:
             model=os.environ.get("ARK_MODEL", "doubao-seed-1-6-250615"),
             api_key=_require_env("ARK_API_KEY"),
             base_url=_require_env("ARK_BASE_URL"),
+        )
+    if provider in PROVIDER_ALIASES:
+        return ChatOpenAI(
+            model=os.environ.get("DASHSCOPE_MODEL", DEFAULT_CHAT_MODEL),
+            api_key=_require_env("DASHSCOPE_API_KEY"),
+            base_url=resolve_base_url(),
         )
     raise ValueError(f"未知的 LLM_PROVIDER: {provider}")

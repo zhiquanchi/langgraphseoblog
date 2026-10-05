@@ -1,6 +1,6 @@
 """知识库服务:SQLite 存权威文档与分块,向量索引按需构建——索引只是缓存。
 
-- 默认 InMemoryVectorStore（零额外依赖）;VECTOR_STORE=chroma 时切换 langchain-chroma 持久化;
+- 默认 InMemoryVectorStore（零额外依赖）;VECTOR_STORE=chroma / qdrant 时切换对应持久化实现;
 - memory 索引重启即失,首次检索时自动从 knowledge_chunks 表重建;
 - EMBEDDING_PROVIDER 未配置时服务整体降级:检索节点跳过、管理 API 返回 503;
 - 切块用 RecursiveCharacterTextSplitter(800/120),入库保留 title/source 元数据做引用溯源。
@@ -8,6 +8,7 @@
 
 import os
 import threading
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -24,6 +25,12 @@ from app.rag.embeddings import build_env_embeddings
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
 RETRIEVE_TOP_K = 4
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
+
+def _point_id(chunk_id: str) -> str:
+    """分块主键 "{doc_id}:{seq}" 映射为点位 id;Qdrant 只接受 uint/UUID,故统一用 uuid5。"""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
 
 class RagNotConfiguredError(Exception):
@@ -86,7 +93,7 @@ class KnowledgeService:
                     )
                     for seq, piece in enumerate(pieces)
                 ],
-                ids=[f"{doc.id}:{seq}" for seq in range(len(pieces))],
+                ids=[_point_id(f"{doc.id}:{seq}") for seq in range(len(pieces))],
             )
             session.commit()
             return {"doc_id": doc.id, "chunks": len(pieces)}
@@ -109,7 +116,7 @@ class KnowledgeService:
             session.commit()
         if chunk_ids:
             with self._lock:
-                self._store.delete(chunk_ids)
+                self._store.delete([_point_id(chunk_id) for chunk_id in chunk_ids])
         return True
 
     def search(self, query: str, k: int = RETRIEVE_TOP_K) -> list[dict]:
@@ -188,13 +195,13 @@ class KnowledgeService:
                         )
                         for chunk, title, source in rows
                     ],
-                    ids=[chunk.id for chunk, _, _ in rows],
+                    ids=[_point_id(chunk.id) for chunk, _, _ in rows],
                 )
             self._rebuilt = True
 
 
 def _build_vector_store(embeddings: Embeddings) -> tuple[InMemoryVectorStore | object, str]:
-    """按 VECTOR_STORE 选择向量库实现;chroma 为可选依赖,缺失时给出安装指引。"""
+    """按 VECTOR_STORE 选择向量库实现;chroma/qdrant 为可选依赖,缺失时给出安装指引。"""
     kind = os.environ.get("VECTOR_STORE", "memory").strip().lower()
     if kind == "memory":
         return InMemoryVectorStore(embedding=embeddings), "memory"
@@ -205,10 +212,7 @@ def _build_vector_store(embeddings: Embeddings) -> tuple[InMemoryVectorStore | o
             raise RagNotConfiguredError(
                 "VECTOR_STORE=chroma 需要先安装可选依赖: uv sync --extra chroma"
             ) from exc
-        persist_dir = os.environ.get(
-            "CHROMA_DIR",
-            str(Path(__file__).resolve().parents[2] / "data" / "chroma"),
-        )
+        persist_dir = os.environ.get("CHROMA_DIR", str(DATA_DIR / "chroma"))
         return (
             Chroma(
                 collection_name="seo_knowledge",
@@ -217,7 +221,37 @@ def _build_vector_store(embeddings: Embeddings) -> tuple[InMemoryVectorStore | o
             ),
             "chroma",
         )
+    if kind == "qdrant":
+        return _build_qdrant_store(embeddings), "qdrant"
     raise ValueError(f"未知的 VECTOR_STORE: {kind}")
+
+
+def _build_qdrant_store(embeddings: Embeddings) -> object:
+    """Qdrant:配 QDRANT_URL 走服务端,否则用本地嵌入式目录（免起服务）。集合按维度自动建。"""
+    try:
+        from langchain_qdrant import QdrantVectorStore
+        from qdrant_client import QdrantClient, models
+    except ImportError as exc:
+        raise RagNotConfiguredError(
+            "VECTOR_STORE=qdrant 需要先安装可选依赖: uv sync --extra qdrant"
+        ) from exc
+
+    collection = os.environ.get("QDRANT_COLLECTION", "seo_knowledge")
+    url = os.environ.get("QDRANT_URL", "").strip()
+    if url:
+        client = QdrantClient(url=url, api_key=os.environ.get("QDRANT_API_KEY") or None)
+    else:
+        local_dir = Path(os.environ.get("QDRANT_DIR", str(DATA_DIR / "qdrant")))
+        local_dir.mkdir(parents=True, exist_ok=True)
+        client = QdrantClient(path=str(local_dir))
+
+    if not client.collection_exists(collection):
+        size = len(embeddings.embed_query("dimension probe"))
+        client.create_collection(
+            collection_name=collection,
+            vectors_config=models.VectorParams(size=size, distance=models.Distance.COSINE),
+        )
+    return QdrantVectorStore(client=client, collection_name=collection, embedding=embeddings)
 
 
 _service: KnowledgeService | None = None

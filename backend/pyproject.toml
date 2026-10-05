@@ -19,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 # VECTOR_STORE=chroma 时需要：uv sync --extra chroma
 chroma = ["langchain-chroma>=0.2"]
+# VECTOR_STORE=qdrant 时需要：uv sync --extra qdrant
+qdrant = ["langchain-qdrant>=0.3"]
 
 [dependency-groups]
 dev = [

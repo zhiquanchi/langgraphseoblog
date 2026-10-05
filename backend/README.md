@@ -29,7 +29,7 @@ export TAVILY_API_KEY=tvly-...
 ```bash
 export EMBEDDING_PROVIDER=openai        # openai / ark / dashscope（OpenAI 兼容协议）
 export EMBEDDING_MODEL=text-embedding-3-small
-export VECTOR_STORE=qdrant              # memory（零依赖）/ chroma / qdrant（需对应 --extra）
+# 向量索引唯一实现为 Qdrant，默认本地嵌入式文件模式，无需配置
 ```
 
 改用阿里云百炼：
@@ -41,22 +41,20 @@ export DASHSCOPE_API_KEY=sk-...
 # export DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  # 缺省即此地址
 ```
 
-百炼 embeddings 单次请求最多 10 条文本，入库时会按 10 条一批自动切分；`text-embedding-v4` 默认 1024 维，与 `text-embedding-3-small`（1536 维）不兼容，换模型需清掉 `data/chroma` / `data/qdrant`（或删掉对应集合）后重新导入语料，SQLite 里的文档与分块不受影响。
+百炼 embeddings 单次请求最多 10 条文本，入库时会按 10 条一批自动切分；`text-embedding-v4` 默认 1024 维，与 `text-embedding-3-small`（1536 维）不兼容，换模型需清掉 `data/qdrant`（或删掉对应集合），首次检索会用新 embedding 自动重建索引，SQLite 里的文档与分块不受影响。
 
-## 向量库选型
+## 向量库：Qdrant
 
-三种实现共用同一套「SQLite 为权威、向量索引为缓存」的契约，按 `VECTOR_STORE` 切换：
+唯一实现是 Qdrant（`langchain-qdrant` 为主依赖，`uv sync` 即装），遵守「SQLite 为权威、向量索引为缓存」的契约：集合为空但 `knowledge_chunks` 有分块时（如 `data/qdrant` 被清空），首次检索自动全量重建。两种模式：
 
-| 取值 | 依赖 | 持久化 | 适用 |
+| 模式 | 配置 | 持久化 | 适用 |
 | --- | --- | --- | --- |
-| `memory` | 无 | 否（重启后首次检索自动重建） | 默认、CI、演示 |
-| `chroma` | `uv sync --extra chroma` | `data/chroma` 本地文件 | 单机轻量持久化 |
-| `qdrant` | `uv sync --extra qdrant` | `data/qdrant` 本地嵌入式，或 `QDRANT_URL` 指向服务端 | 需要正式向量库/服务端实例、后续上生产 |
+| 本地嵌入式（默认） | 什么都不用配，向量落在 `backend/data/qdrant` | 是（本地文件） | 开发、演示、CI |
+| 服务端实例 | `QDRANT_URL`（可选 `QDRANT_API_KEY`） | 是（独立进程 / named volume） | 接近生产、多进程共享 |
 
 Qdrant 相关环境变量：
 
 ```bash
-export VECTOR_STORE=qdrant
 export QDRANT_DIR=./data/qdrant          # 本地嵌入式文件模式，免起服务（默认）
 export QDRANT_COLLECTION=seo_knowledge   # 集合名，默认 seo_knowledge
 # export QDRANT_URL=http://localhost:6333   # 填了就优先连服务端实例
@@ -78,14 +76,13 @@ curl http://localhost:6333/readyz      # 期望：all shards are ready
 后端切到服务端模式（`QDRANT_URL` 优先于本地嵌入式目录）：
 
 ```bash
-export VECTOR_STORE=qdrant
 export QDRANT_URL=http://localhost:6333
 # export QDRANT_API_KEY=...            # compose 里启用 QDRANT__SERVICE__API_KEY 后需同步
 ```
 
-其余常用命令：`docker compose logs -f qdrant`；`docker compose down` 停止但保留数据；`docker compose down -v` 连向量数据一起清（SQLite 文档不受影响，重新 `POST /api/rag/seed` 即可重建索引）。集合仍由后端按当前 embedding 维度自动创建，名字取 `QDRANT_COLLECTION`（默认 `seo_knowledge`）。
+其余常用命令：`docker compose logs -f qdrant`；`docker compose down` 停止但保留数据；`docker compose down -v` 连向量数据一起清（SQLite 文档不受影响，首次检索自动重建索引）。集合仍由后端按当前 embedding 维度自动创建，名字取 `QDRANT_COLLECTION`（默认 `seo_knowledge`）。
 
-文档与分块的权威数据存 SQLite，向量索引是可重建的缓存（memory 索引重启后首次检索自动重建）。启动后调 `POST /api/rag/seed` 幂等导入 `data/corpus/` 内置语料，或在前端「知识库」页管理文档、测试检索。
+文档与分块的权威数据存 SQLite，Qdrant 向量索引是可重建的缓存（集合丢失后首次检索自动重建）。启动后调 `POST /api/rag/seed` 幂等导入 `data/corpus/` 内置语料，或在前端「知识库」页管理文档、测试检索。
 
 ## 测试
 

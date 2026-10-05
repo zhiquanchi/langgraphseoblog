@@ -14,7 +14,7 @@
 - **LangGraph 状态图工作流**：`retrieve → outline → review_outline → draft → seo_score ⇄ seo_optimize`，条件边 + 循环重写 + 人工介入 + 断点续跑
 - **Human-in-the-loop 大纲确认**：`interrupt` 暂停后，用户可以确认、手动编辑标题/大纲，或用自然语言下修订指令让模型重新生成（对话式修订自循环）
 - **SEO 质量闭环**：draft 后由 `seo_score` 节点按关键词覆盖/结构/内容深度评分，低于阈值自动回到 `seo_optimize` 按建议重写并复评；重写次数有上限，不会死循环
-- **RAG 知识检索**：内置 SEO 语料一键入库；SQLite 存权威文档与分块，向量索引可插拔（默认 `InMemoryVectorStore` 零依赖，`VECTOR_STORE=chroma` / `qdrant` 切换持久化，Qdrant 支持本地嵌入式文件或服务端实例），重启后索引自动重建；检索片段带来源，注入撰写 prompt 做引用溯源
+- **RAG 知识检索**：内置 SEO 语料一键入库；SQLite 存权威文档与分块，向量索引固定使用 **Qdrant**（默认本地嵌入式文件模式零外部进程，配 `QDRANT_URL` 可连服务端实例）；索引丢失时首次检索自动从 SQLite 全量重建；检索片段带来源，注入撰写 prompt 做引用溯源
 - **多 LLM Provider 管理**：Provider CRUD / 连通性测试 / 模型列表自动发现 / 按节点路由 / fallback 链；**API Key 只存用户浏览器本地，后端不留存**
 - **故障自动转移（FallbackChatModel）**：认证失败 / 限流 / 超时 / 5xx 自动切换候选 Provider，4xx 业务错误立即抛出；**流式模式下仅首 token 产生前允许切换**；每次尝试写入调用统计与 failover 链路
 - **SSE 流式输出**：大纲 token、正文 token、SEO 评分、RAG 检索结果全部以自定义事件实时推送，SEO 重写时前端可见修订稿逐字覆盖旧稿
@@ -38,7 +38,7 @@ flowchart TD
 
     subgraph 外部依赖
         llm[("多 LLM Provider<br/>fallback 链 + 调用统计")]
-        vector_db[("向量库<br/>memory / chroma")]
+        vector_db[("Qdrant 向量库<br/>嵌入式 / 服务端")]
     end
 
     outline -.-> llm
@@ -113,7 +113,7 @@ return {"title": decision.get("title") or state["title"],
 
 ### RAG 管道
 
-权威数据与索引分离：文档和分块持久化在 SQLite（`knowledge_docs` / `knowledge_chunks`），向量索引只是可重建的缓存——`memory` 索引重启即失，首次检索时自动从 SQLite 重建；`chroma` 则自带持久化。
+权威数据与索引分离：文档和分块持久化在 SQLite（`knowledge_docs` / `knowledge_chunks`），Qdrant 向量索引只是可重建的缓存——即使 `data/qdrant` 目录被清空或集合被删，只要 SQLite 还有分块，首次检索就会自动全量重建索引（集合按当前 embedding 维度自动创建）。
 
 - 切块：`RecursiveCharacterTextSplitter(800/120)`；入库保留 `title/source` 元数据做引用溯源
 - 检索：`retrieve` 节点按「主题 + 关键词」召回 Top-4，注入撰写 prompt 作为事实依据
@@ -155,11 +155,11 @@ langgraphseoblog/
 │   │   │   ├── model_catalog.py   # Provider 类型目录 + 模型列表自动发现
 │   │   │   └── stats.py           # 调用统计落库与脱敏
 │   │   ├── rag/
-│   │   │   ├── service.py         # 知识库服务：入库/检索/删除/索引重建/向量库切换
+│   │   │   ├── service.py         # 知识库服务：入库/检索/删除/Qdrant 连接与索引重建
 │   │   │   └── embeddings.py      # EMBEDDING_PROVIDER → Embeddings（OpenAI 兼容）
 │   │   └── search/tavily.py       # Tavily 搜索适配
 │   ├── data/corpus/               # 内置 RAG 示例语料（一键导入）
-│   └── tests/                     # 48 个测试：图流程 / SSE / RAG（含 Qdrant）/ 降级 / 工厂 / 研究
+│   └── tests/                     # 46 个测试：图流程 / SSE / RAG（Qdrant 往返与重建）/ 降级 / 工厂 / 研究
 └── frontend/src/
     ├── pages/                     # 博客生成 / 知识库 / Provider 管理 / 调用统计
     └── api/                       # 后端 API 客户端封装（含 SSE 解析）
@@ -174,28 +174,28 @@ langgraphseoblog/
 - 至少一个 LLM 的 API Key（页面上配置并保存在浏览器本地，或走环境变量）
 - Docker（可选）：仅向量库走 Qdrant 服务端模式时需要；不装也能用默认的本地嵌入式模式
 
-### 启动 Qdrant 向量库（可选）
+### Qdrant 向量库的两种跑法
 
-`VECTOR_STORE=qdrant` 有两种跑法，都不需要额外装 Python 服务：
+向量索引唯一实现是 Qdrant（`langchain-qdrant` 为主依赖，`uv sync` 即装），默认零配置：
 
 ```bash
-# A. 本地嵌入式文件模式：零进程，向量落在 backend/data/qdrant
-uv sync --extra qdrant && export VECTOR_STORE=qdrant
+# A. 本地嵌入式文件模式（默认）：零外部进程，向量落在 backend/data/qdrant
+#    什么都不用起，直接启动后端即可
 
 # B. Docker 服务端模式：仓库根目录的 docker-compose.yml
 docker compose up -d qdrant              # 镜像 qdrant/qdrant:v1.19.1，数据存 named volume qdrant_data
 curl http://localhost:6333/readyz        # all shards are ready
-export VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333
+export QDRANT_URL=http://localhost:6333
 # http://localhost:6333/dashboard 是内置 Web 控制台
 ```
 
-`QDRANT_URL` 一旦设置就优先于 `QDRANT_DIR`；`docker compose down -v` 清掉向量数据后，SQLite 里的文档与分块不受影响，重新 `POST /api/rag/seed` 即可重建索引。
+`QDRANT_URL` 一旦设置就优先于 `QDRANT_DIR`；`docker compose down -v` 或删掉 `data/qdrant` 清掉向量数据后，SQLite 里的文档与分块不受影响，首次检索会自动从 SQLite 重建索引（无需重新导入语料）。
 
 ### 启动后端（端口 8000）
 
 ```bash
 cd backend
-uv sync                # 如需 Qdrant：uv sync --extra qdrant；如需 Chroma：uv sync --extra chroma
+uv sync                # Qdrant 为主依赖，无需额外 extras
 uv run uvicorn app.main:app --reload
 ```
 
@@ -219,15 +219,14 @@ npm run dev
 | `DASHSCOPE_BASE_URL` | 百炼 OpenAI 兼容端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `EMBEDDING_PROVIDER` | RAG 向量化：`openai` / `ark` / `dashscope`（OpenAI 兼容协议）；**不配置则 RAG 关闭，主流程不受影响** | 未设置 |
 | `EMBEDDING_MODEL` | embedding 模型名 | `text-embedding-3-small`（百炼下为 `text-embedding-v4`） |
-| `VECTOR_STORE` | 向量索引实现：`memory`（零依赖）/ `chroma`（`--extra chroma`）/ `qdrant`（`--extra qdrant`）；`.env.example` 默认 `qdrant` | `memory` |
-| `QDRANT_DIR` | Qdrant 本地嵌入式文件目录，免起服务 | `backend/data/qdrant` |
+| `QDRANT_DIR` | Qdrant 本地嵌入式文件目录（默认实现，免起服务） | `backend/data/qdrant` |
 | `QDRANT_URL` | Qdrant 服务端地址，填了优先于 `QDRANT_DIR` | 未设置 |
 | `QDRANT_API_KEY` | Qdrant 服务端 API Key / 云实例凭证 | 未设置 |
 | `QDRANT_COLLECTION` | Qdrant 集合名（按 embedding 维度自动创建，cosine） | `seo_knowledge` |
 
 Provider 与 API Key 推荐直接在前端「Provider 管理」页配置（Key 仅存浏览器本地）；系统未配置任何 Provider 时回退到上面的环境变量模式。
 
-选「阿里云百炼 (DashScope)」类型时可留空 Base URL（自动用北京区兼容端点），点「获取模型」会拉取账号可用模型列表。RAG 侧注意两点：百炼 embeddings 单次请求上限 10 条文本（入库已按 10 条分批），`text-embedding-v4` 默认 1024 维，与 OpenAI 的 1536 维不通用，切换后需清空 `data/chroma` / `data/qdrant`（或删掉对应集合）重新导入语料。
+选「阿里云百炼 (DashScope)」类型时可留空 Base URL（自动用北京区兼容端点），点「获取模型」会拉取账号可用模型列表。RAG 侧注意两点：百炼 embeddings 单次请求上限 10 条文本（入库已按 10 条分批），`text-embedding-v4` 默认 1024 维，与 OpenAI 的 1536 维不通用，切换后删掉 `data/qdrant` 目录或对应集合即可，首次检索会用新 embedding 自动重建索引。
 
 ## API 概览
 
@@ -249,7 +248,7 @@ Provider 与 API Key 推荐直接在前端「Provider 管理」页配置（Key �
 ## 测试
 
 ```bash
-cd backend && uv run pytest     # 48 个测试：图流程(interrupt/修订/SEO 循环)、SSE、RAG(含 Qdrant 往返)、降级边界、工厂与解析
+cd backend && uv run pytest     # 46 个测试：图流程(interrupt/修订/SEO 循环)、SSE、RAG(Qdrant 往返与重建)、降级边界、工厂与解析
 cd frontend && npm run build    # 前端类型检查 + 构建
 ```
 

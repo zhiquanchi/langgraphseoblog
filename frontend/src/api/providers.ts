@@ -1,6 +1,6 @@
 import { http } from './client'
 
-export type ProviderType = 'openai' | 'anthropic' | 'ark' | 'openai-compatible'
+export type ProviderType = 'openai' | 'anthropic' | 'ark' | 'dashscope' | 'openai-compatible'
 
 export interface ModelOption {
   id: string

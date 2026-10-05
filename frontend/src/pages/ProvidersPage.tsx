@@ -35,6 +35,7 @@ const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'ark', label: '火山方舟 (Ark)' },
+  { value: 'dashscope', label: '阿里云百炼 (DashScope)' },
   { value: 'openai-compatible', label: 'OpenAI 兼容端点' },
 ]
 
@@ -269,7 +270,13 @@ function ProvidersPage() {
               },
             ]}
           >
-            <Input placeholder="https://api.example.com/v1" />
+            <Input
+              placeholder={
+                watchedType === 'dashscope'
+                  ? '留空则用 https://dashscope.aliyuncs.com/compatible-mode/v1'
+                  : 'https://api.example.com/v1'
+              }
+            />
           </Form.Item>
           <Form.Item
             name="api_key"

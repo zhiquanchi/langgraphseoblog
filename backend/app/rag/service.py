@@ -1,7 +1,7 @@
-"""知识库服务:SQLite 存权威文档与分块,向量索引按需构建——索引只是缓存。
+"""知识库服务:SQLite 存权威文档与分块,Qdrant 向量索引只是可重建的缓存。
 
-- 默认 InMemoryVectorStore（零额外依赖）;VECTOR_STORE=chroma / qdrant 时切换对应持久化实现;
-- memory 索引重启即失,首次检索时自动从 knowledge_chunks 表重建;
+- 向量库唯一实现为 Qdrant:默认本地嵌入式文件目录（零外部进程）,配 QDRANT_URL 连服务端实例;
+- 集合为空但 SQLite 有分块（如 data/qdrant 被清空）时,首次检索自动从 knowledge_chunks 全量重建;
 - EMBEDDING_PROVIDER 未配置时服务整体降级:检索节点跳过、管理 API 返回 503;
 - 切块用 RecursiveCharacterTextSplitter(800/120),入库保留 title/source 元数据做引用溯源。
 """
@@ -14,7 +14,6 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import func, select
 
@@ -48,8 +47,8 @@ class KnowledgeService:
     def __init__(
         self,
         embeddings: Embeddings | None,
-        vector_store: InMemoryVectorStore | object,
-        store_kind: str = "memory",
+        vector_store: object,
+        store_kind: str = "qdrant",
     ) -> None:
         self._embeddings = embeddings
         self._store = vector_store
@@ -120,7 +119,7 @@ class KnowledgeService:
         return True
 
     def search(self, query: str, k: int = RETRIEVE_TOP_K) -> list[dict]:
-        """语义检索,带引用溯源元数据;memory 索引为空时先从 SQLite 重建。"""
+        """语义检索,带引用溯源元数据;索引为空时先从 SQLite 重建。"""
         self._require_ready()
         self._ensure_index()
         with self._lock:
@@ -166,12 +165,13 @@ class KnowledgeService:
             return int(session.scalar(select(func.count(KnowledgeChunk.id))) or 0)
 
     def _ensure_index(self) -> None:
-        """memory 索引重启即失:首个检索请求触发一次从 knowledge_chunks 的重建。"""
-        if self._rebuilt or self._store_kind != "memory":
+        """索引只是缓存:集合为空但 SQLite 有分块时,首个检索请求前全量重建。"""
+        if self._rebuilt:
             return
         with self._lock:
             if self._rebuilt:
                 return
+            self._rebuilt = True
             with SessionLocal() as session:
                 rows = list(
                     session.execute(
@@ -180,8 +180,10 @@ class KnowledgeService:
                         .order_by(KnowledgeChunk.id)
                     ).all()
                 )
-            # InMemoryVectorStore 的 store 为键值字典,可直接判空
-            if rows and len(getattr(self._store, "store", {})) == 0:
+            if not rows:
+                return
+            points = self._store.client.count(self._store.collection_name).count
+            if points == 0:
                 self._store.add_documents(
                     [
                         Document(
@@ -197,43 +199,16 @@ class KnowledgeService:
                     ],
                     ids=[_point_id(chunk.id) for chunk, _, _ in rows],
                 )
-            self._rebuilt = True
 
 
-def _build_vector_store(embeddings: Embeddings) -> tuple[InMemoryVectorStore | object, str]:
-    """按 VECTOR_STORE 选择向量库实现;chroma/qdrant 为可选依赖,缺失时给出安装指引。"""
-    kind = os.environ.get("VECTOR_STORE", "memory").strip().lower()
-    if kind == "memory":
-        return InMemoryVectorStore(embedding=embeddings), "memory"
-    if kind == "chroma":
-        try:
-            from langchain_chroma import Chroma
-        except ImportError as exc:
-            raise RagNotConfiguredError(
-                "VECTOR_STORE=chroma 需要先安装可选依赖: uv sync --extra chroma"
-            ) from exc
-        persist_dir = os.environ.get("CHROMA_DIR", str(DATA_DIR / "chroma"))
-        return (
-            Chroma(
-                collection_name="seo_knowledge",
-                embedding_function=embeddings,
-                persist_directory=persist_dir,
-            ),
-            "chroma",
-        )
-    if kind == "qdrant":
-        return _build_qdrant_store(embeddings), "qdrant"
-    raise ValueError(f"未知的 VECTOR_STORE: {kind}")
-
-
-def _build_qdrant_store(embeddings: Embeddings) -> object:
-    """Qdrant:配 QDRANT_URL 走服务端,否则用本地嵌入式目录（免起服务）。集合按维度自动建。"""
+def _build_vector_store(embeddings: Embeddings) -> tuple[object, str]:
+    """构建唯一的 Qdrant 向量库:配 QDRANT_URL 走服务端,否则用本地嵌入式目录（免起服务）。"""
     try:
         from langchain_qdrant import QdrantVectorStore
         from qdrant_client import QdrantClient, models
     except ImportError as exc:
         raise RagNotConfiguredError(
-            "VECTOR_STORE=qdrant 需要先安装可选依赖: uv sync --extra qdrant"
+            "缺少 Qdrant 依赖,请在 backend/ 下执行: uv sync"
         ) from exc
 
     collection = os.environ.get("QDRANT_COLLECTION", "seo_knowledge")
@@ -251,7 +226,7 @@ def _build_qdrant_store(embeddings: Embeddings) -> object:
             collection_name=collection,
             vectors_config=models.VectorParams(size=size, distance=models.Distance.COSINE),
         )
-    return QdrantVectorStore(client=client, collection_name=collection, embedding=embeddings)
+    return QdrantVectorStore(client=client, collection_name=collection, embedding=embeddings), "qdrant"
 
 
 _service: KnowledgeService | None = None

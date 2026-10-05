@@ -6,7 +6,6 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
-from langchain_core.vectorstores import InMemoryVectorStore
 
 from app.db import SessionLocal
 from app.main import app
@@ -14,6 +13,7 @@ from app.models import KnowledgeChunk, KnowledgeDoc
 from app.rag.service import (
     RagNotConfiguredError,
     KnowledgeService,
+    _build_vector_store,
     iter_corpus_documents,
 )
 
@@ -38,15 +38,17 @@ class FakeEmbeddings(Embeddings):
 
 
 def build_service() -> KnowledgeService:
-    embeddings = FakeEmbeddings()
-    return KnowledgeService(
-        embeddings, InMemoryVectorStore(embedding=embeddings), store_kind="memory"
-    )
+    """真 Qdrant 本地嵌入式实例;fixture 已把 QDRANT_DIR 指到用例独立 tmp 目录。"""
+    store, kind = _build_vector_store(FakeEmbeddings())
+    return KnowledgeService(FakeEmbeddings(), store, store_kind=kind)
 
 
 @pytest.fixture()
-def rag_service():
-    """干净的知识库服务：每用例重建索引实例，结束后清空权威表。"""
+def rag_service(monkeypatch, tmp_path):
+    """干净的知识库服务：每用例独立 Qdrant 嵌入式目录，结束后清空权威表。"""
+    monkeypatch.setenv("QDRANT_DIR", str(tmp_path / "qdrant"))
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+    monkeypatch.delenv("QDRANT_COLLECTION", raising=False)
     service = build_service()
     yield service
     with SessionLocal() as session:
@@ -97,11 +99,15 @@ def test_delete_removes_doc_and_chunks(rag_service) -> None:
         )
 
 
-def test_memory_index_rebuilds_from_sqlite(rag_service) -> None:
-    """权威数据在 SQLite：新服务实例（模拟重启）首次检索时自动重建索引。"""
+def test_index_rebuilds_from_sqlite(rag_service) -> None:
+    """权威数据在 SQLite：缓存丢失（集合被清空）后，新实例首次检索自动重建索引。"""
     rag_service.ingest("重启前的文档", DOC_A, "persist.md")
 
-    revived = build_service()  # 新实例 = 空索引，但共享同一个测试数据库
+    client = rag_service._store.client
+    client.delete_collection("seo_knowledge")  # 模拟 data/qdrant 目录被整体清掉
+    client.close()
+
+    revived = build_service()  # 同一 tmp 目录：集合自动重建，共享同一个测试数据库
     hits = revived.search("长尾关键词", k=3)
     assert hits
     assert hits[0]["title"] == "重启前的文档"
@@ -127,7 +133,7 @@ def test_rag_api_crud_and_search(rag_client, rag_service) -> None:
     assert status.status_code == 200
     assert status.json() == {
         "enabled": True,
-        "vector_store": "memory",
+        "vector_store": "qdrant",
         "doc_count": 0,
         "chunk_count": 0,
     }

@@ -1,4 +1,7 @@
-"""Qdrant 向量库往返测试：本地嵌入式文件模式 + 假 embedding；真实实例需显式开 QDRANT_SMOKE_URL。"""
+"""Qdrant 特有行为:自定义集合、依赖缺失指引、服务端冒烟(需显式开 QDRANT_SMOKE_URL)。
+
+入库/检索/删除/重建/持久化等通用往返场景已并入 test_rag.py(服务层现唯一使用 Qdrant)。
+"""
 
 import math
 import os
@@ -14,8 +17,6 @@ from app.rag.service import (
     _build_vector_store,
 )
 
-pytest.importorskip("langchain_qdrant", reason="需要 uv sync --extra qdrant")
-
 DIM = 64
 
 DOC = (
@@ -25,7 +26,7 @@ DOC = (
 
 
 class FakeEmbeddings(Embeddings):
-    """确定性词袋向量：重叠越多相似度越高。"""
+    """确定性词袋向量:重叠越多相似度越高。"""
 
     def _vec(self, text: str) -> list[float]:
         vec = [0.0] * DIM
@@ -43,7 +44,6 @@ class FakeEmbeddings(Embeddings):
 
 @pytest.fixture()
 def qdrant_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("VECTOR_STORE", "qdrant")
     monkeypatch.setenv("QDRANT_DIR", str(tmp_path / "qdrant"))
     monkeypatch.delenv("QDRANT_URL", raising=False)
     monkeypatch.delenv("QDRANT_COLLECTION", raising=False)
@@ -55,30 +55,15 @@ def _service() -> KnowledgeService:
     return KnowledgeService(FakeEmbeddings(), store, store_kind=kind)
 
 
-def test_qdrant_round_trip(qdrant_env) -> None:
+def test_qdrant_local_mode_store_and_round_trip(qdrant_env) -> None:
     service = _service()
     assert service.store_kind == "qdrant"
 
     result = service.ingest("SEO 基础", DOC, "seed.md")
-    assert result["chunks"] >= 1
-
     hits = service.search("Core Web Vitals LCP", k=3)
     assert hits and hits[0]["title"] == "SEO 基础"
-    assert "Core Web Vitals" in hits[0]["content"]
-    assert hits[0]["doc_id"] == result["doc_id"]
-
     assert service.delete(result["doc_id"]) is True
     assert service.search("Core Web Vitals", k=3) == []
-
-
-def test_qdrant_persists_across_service_instances(qdrant_env) -> None:
-    service = _service()
-    service.ingest("持久化文档", DOC, "persist.md")
-    service._store.client.close()
-
-    revived = _service()
-    hits = revived.search("长尾关键词", k=3)
-    assert hits and hits[0]["title"] == "持久化文档"
 
 
 def test_qdrant_custom_collection(qdrant_env, monkeypatch) -> None:
@@ -91,13 +76,8 @@ def test_qdrant_custom_collection(qdrant_env, monkeypatch) -> None:
         store.client.close()
 
 
-def test_unknown_vector_store_raises(qdrant_env, monkeypatch) -> None:
-    monkeypatch.setenv("VECTOR_STORE", "milvus")
-    with pytest.raises(ValueError, match="未知的 VECTOR_STORE"):
-        _build_vector_store(FakeEmbeddings())
-
-
-def test_missing_optional_dependency_reports_actionably(qdrant_env, monkeypatch) -> None:
+def test_missing_dependency_reports_actionably(qdrant_env, monkeypatch) -> None:
+    """langchain-qdrant 已是主依赖:仍要在环境损坏时给出可执行指引(uv sync)。"""
     import builtins
 
     real_import = builtins.__import__
@@ -108,7 +88,7 @@ def test_missing_optional_dependency_reports_actionably(qdrant_env, monkeypatch)
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", blocked)
-    with pytest.raises(RagNotConfiguredError, match="uv sync --extra qdrant"):
+    with pytest.raises(RagNotConfiguredError, match="uv sync"):
         _build_vector_store(FakeEmbeddings())
 
 
@@ -117,9 +97,8 @@ def test_missing_optional_dependency_reports_actionably(qdrant_env, monkeypatch)
     reason="需显式设置 QDRANT_SMOKE_URL（docker compose up -d qdrant 后指向 http://localhost:6333）",
 )
 def test_qdrant_server_mode(monkeypatch) -> None:
-    """真实 Qdrant 实例：验证 QDRANT_URL 分支与 uuid5 点位删除在服务端同样可用。"""
+    """真实 Qdrant 实例:验证 QDRANT_URL 分支与 uuid5 点位删除在服务端同样可用。"""
     collection = f"smoke_{uuid.uuid4().hex[:8]}"
-    monkeypatch.setenv("VECTOR_STORE", "qdrant")
     monkeypatch.setenv("QDRANT_URL", os.environ["QDRANT_SMOKE_URL"])
     monkeypatch.setenv("QDRANT_COLLECTION", collection)
 
